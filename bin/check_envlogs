@@ -1,0 +1,48 @@
+import os
+import sys
+
+def get_key_dct(files):
+    key_dct = {}
+    for fl in files:
+        elems = fl.split("__")
+        key = "{}:{}:{}".format(*elems[:-1])
+        if key not in key_dct:
+            key_dct[key] = []
+        key_dct[key].append(fl)
+    return key_dct
+
+
+def get_size(filename):
+    with open(filename) as fh:
+        buf = bytes(fh.read())
+    return len(buf)
+
+
+def check(dirname, key, files):
+    sizes = [get_size(os.path.join(dirname, f)) for f in files]
+    if sizes != [sizes[0]] * len(sizes):
+        print("ENVS ARE DIFFERENT SIZES FOR %s" % key)
+        print("  %s\n" % sizes)
+    else:
+        print("env size was consistent for %s" % key)
+        print("  %6d\n" % sizes[0])
+    return set(sizes)
+
+
+def main(dirname):
+    files = os.listdir(dirname)
+    key_dct = get_key_dct(files)
+
+    saw_sizes = set()
+    for key, files in key_dct.iteritems():
+        saw_sizes |= set(check(dirname, key, files))
+
+    if len(saw_sizes) == 1:
+        print("All VMs had the same size envs: %d" % saw_sizes.pop())
+    else:
+        print("Different VMs had different size envs: %d" % saw_sizes)
+
+
+if __name__ == "__main__":
+    dirname = sys.argv[1]
+    main(dirname)
