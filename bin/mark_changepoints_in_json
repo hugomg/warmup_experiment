@@ -197,7 +197,6 @@ def get_segments(cpt_reg, data, steady_state, outliers):
             start = c_points[index - 1]
         end = c_point
         segment_data = p_exec[start:end]
-        print 'DATA:', p_exec, 'start,end:', (start, end), 'segment data:', segment_data
         means.append(numpy.mean(segment_data))
         variances.append(numpy.var(segment_data))
     # If outliers were deleted, the index of each changepoint will have moved.
