@@ -124,7 +124,7 @@ class Segments(object):
         return classification
 
 
-def main(in_files, steady_state, penalty=False):
+def main(in_files, steady_state):
     cpt = rpy2.interactive.packages.importr('changepoint')
     r_version = '.'.join(R_VERSION_BUILD[:2])
     print 'Using R version %s and changepoint library %s' % (r_version, cpt.__version__)
@@ -257,4 +257,4 @@ if __name__ == '__main__':
     print ('Marking changepoints and classifications, expecting a steady state '
            'to be reached before the last %d iterations.' %
            options.steady_state)
-    main(options.json_files[0], options.steady_state, options.penalty)
+    main(options.json_files[0], options.steady_state)
