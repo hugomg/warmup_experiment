@@ -298,12 +298,12 @@ class BenchmarkPlotDocument(object):
                 changepoint_means = self._only_uncrashed(self.all_changepoint_means[index], page, mc, bmark, vm)
                 classifications = self._only_uncrashed(self.all_classifications[index], page, mc, bmark, vm)
                 # Draw this page.
-                fig = draw_page(self.is_interactive, wct_page, cycles_page,
-                                instr_page, subplot_titles, self.window_size, self.xlimits,
-                                outliers, unique, common, changepoints, changepoint_means,
-                                classifications, self.median, self.tukey, self.inset,
-                                self.zoom, self.legend_off, self.core_cycles,
-                                self.cycles_ylimits)
+                fig = DocumentPage(self.is_interactive, wct_page, cycles_page,
+                                    instr_page, subplot_titles, self.window_size,
+                                    self.xlimits, outliers, unique, common, changepoints,
+                                    changepoint_means, classifications, self.median,
+                                    self.tukey, self.inset, self.zoom, self.legend_off,
+                                    self.core_cycles, self.cycles_ylimits).draw_page()
                 if fig is not None:
                     if not self.is_interactive:
                         pdf.savefig(fig, dpi=fig.dpi, orientation='landscape',
@@ -315,6 +315,178 @@ class BenchmarkPlotDocument(object):
             if not self.is_interactive:
                 pdf.close()
                 print 'Saved: %s' % self.pdf_filename
+
+
+class DocumentPage(object):
+
+    def __init__(self, is_interactive, executions, cycles_executions,
+                  instr_executions, titles, window_size, xlimits,
+                  outliers, unique, common, changepoints, changepoint_means, classifications,
+                  median, tukey, inset=False, zoom=True, legend_off=True,
+                  core_cycles=(0,1,2,3), cycles_ylimits=None):
+        self.is_interactive = is_interactive
+        self.executions = executions  # TODO RENAME
+        self.cycles_executions = cycles_executions
+        self.instr_executions = instr_executions
+        self.titles = titles
+        self.window_size = window_size
+        self.xlimits = xlimits
+        self.outliers = outliers
+        self.unique = unique
+        self.common = common
+        self.changepoints = changepoints
+        self.changepoint_means = changepoint_means
+        self.classifications = classifications
+        self.median = median
+        self.tukey = tukey
+        self.inset = inset
+        self.zoom = zoom
+        self.legend_off = legend_off
+        self.core_cycles = core_cycles
+        self.cycles_ylimits = cycles_ylimits
+
+    def draw_page(self):
+        """Plot a page of benchmarks.
+        """
+        n_execs = len(self.executions)
+        if n_execs == 0:
+            print('WARNING: empty page')
+            return None
+
+        n_rows = int(math.ceil(float(len(self.executions)) / MAX_SUBPLOTS_PER_ROW))
+        n_cols = min(MAX_SUBPLOTS_PER_ROW, n_execs)
+
+        print('%g plots arranged in %g rows and %g columns.'
+              % (len(self.executions), n_rows, n_cols))
+
+        if self.xlimits is None:
+            xlimits_start = 0
+            xlimits_stop = len(self.executions[0])  # Assume all execs are the same length
+        else:
+            try:
+                xlimits_start, xlimits_stop = [int(x) for x in self.xlimits.split(',')]
+                if xlimits_start < 0 or xlimits_stop > len(self.executions[0]):
+                    fatal_error('You specified %s as xlimits, but your data contains'
+                                ' iterations between 0 and %d' %
+                                (self.xlimits, len(self.executions[0])))
+            except ValueError:
+                fatal_error('Invalid xlimits pair: %s' % self.xlimits)
+
+        # Find the min and max y values across all wallclock time plots for this page.
+        y_min, y_max = get_unified_yrange(self.executions, xlimits_start, xlimits_stop, padding=Y_LIM_PADDING)
+
+        # Find y-limits for a zoomed-in plot for each execution on this page.
+        y_range_zoom = list()
+        if not self.zoom:  # User requested no zoom plot.
+            y_range_zoom = [(None, None)] * len(self.executions)
+        else:
+            for index in xrange(len(self.executions)):
+                if self.window_size > 0:
+                    first_n = self.window_size
+                else:
+                    first_n = int(len(self.executions[index]) * ZOOM_PROPORTION)
+                if self.outliers:
+                    y_zoom_min = zoom_y_min(self.executions[index], self.outliers[index], start_from=first_n)
+                    y_zoom_max = zoom_y_max(self.executions[index], self.outliers[index], start_from=first_n)
+                else:
+                    y_zoom_min = min(self.executions[index][first_n:])
+                    y_zoom_max = max(self.executions[index][first_n:])
+                y_range_zoom.append((y_zoom_min, y_zoom_max))
+
+        # Get unified y-ranges for the instrumentation data. Each VM may have more
+        # more than one set of instrumentation data (e.g. GC events, JIT
+        # compilation, etc.) and each VM instrument must have its own y-range.
+        if self.instr_executions:
+            instr_data_by_instrument = []
+            for execution in self.instr_executions:
+                if execution is None:
+                    continue  # absent instr data for this pexec
+                instr_data_by_instrument = [list() for _ in execution]
+                break
+            for execution in self.instr_executions:
+                if execution is None:
+                    for index in xrange(len(instr_data_by_instrument)):
+                        instr_data_by_instrument[index].append(None)
+                else:
+                    for index, instrument_data in enumerate(execution):
+                        instr_data_by_instrument[index].append(instrument_data.data)
+            instr_y_ranges = list()
+            for chart_data in instr_data_by_instrument:
+                chart_data_stripped = [x for x in chart_data if x is not None]
+                instr_y_ranges.append(get_unified_yrange(chart_data_stripped, xlimits_start,
+                                                         xlimits_stop, padding=Y_LIM_PADDING))
+        else:
+            instr_y_ranges = None
+
+        fig = pyplot.figure()
+        # Set figure size here, so coordinates are correct before we draw insets.
+        if not self.is_interactive:
+            export_size = (EXPORT_SIZE_INCHES[0] * n_cols, EXPORT_SIZE_INCHES[1] * n_rows)
+            fig.set_size_inches(*export_size)
+
+        outer_grid = gridspec.GridSpec(n_rows, n_cols)
+        p_exec_charts = list()  # ProcessExecChart objects for this page.
+        index, row, col = 0, 0, 0
+        cycles_data, instr_data = None, None
+        outliers_exec, unique_exec, common_exec = None, None, None
+        changepoint_exec, changepoint_mean_exec = None, None
+        classification_exec = None
+        while index < n_execs:
+            data = self.executions[index]
+            if self.cycles_executions:
+                cycles_data = self.cycles_executions[index]
+            if self.instr_executions:
+                instr_data = self.instr_executions[index]
+            if self.outliers:
+                outliers_exec = self.outliers[index]
+            if self.unique:
+                unique_exec = self.unique[index]
+            if self.common:
+                common_exec = self.common[index]
+            if self.changepoints:
+                changepoint_exec = self.changepoints[index]
+                self.classification_exec = self.classifications[index]
+            if self.changepoint_means:
+                changepoint_mean_exec = self.changepoint_means[index]
+                classification_exec = self.classifications[index]
+            # Get axis and draw plot.
+            inner_grid = outer_grid[row, col]
+            x_bounds = [xlimits_start, xlimits_stop]
+            p_exec_charts.append(ProcessExecChart(inner_grid, data, cycles_data,
+                     instr_data, instr_y_ranges, self.titles[index], x_bounds,
+                     [y_min, y_max], y_range_zoom[index], self.window_size,
+                     outliers_exec, unique_exec, common_exec, changepoint_exec,
+                     changepoint_mean_exec, classification_exec, self.median,
+                     self.tukey, self.core_cycles, self.cycles_ylimits))
+            p_exec_charts[index].plot_stack()
+            col += 1
+            if col == MAX_SUBPLOTS_PER_ROW:
+                col = 0
+                row += 1
+            index = row * MAX_SUBPLOTS_PER_ROW + col
+        # Update page grid before drawing insets, to ensure bounding boxes are correct.
+        outer_grid.update(**SUBPLOT_PARAMS)
+        if self.inset:
+            for chart in p_exec_charts:
+                chart.plot_inset(chart.wallclock_axis, fig)
+        if self.tukey:  # Add Tukey band to legend.
+            fill_patch = matplotlib.patches.Patch(color=LINE_COLOUR, alpha=FILL_ALPHA)
+            p_exec_charts[0].handles_labels[0].append(fill_patch)
+            p_exec_charts[0].handles_labels[1].append('$\pm3(90^\mathrm{th}-10^\mathrm{th} \mathrm{percentile})$')
+        # One legend per page.
+        if not self.legend_off:
+            fig.legend(p_exec_charts[0].handles_labels[0], p_exec_charts[0].handles_labels[1],
+                       loc='upper center', fontsize=LEGEND_FONTSIZE, ncol=10, borderaxespad=0)
+        if self.is_interactive:
+            mng = pyplot.get_current_fig_manager()
+            mng.resize(*mng.window.maxsize())
+            pyplot.show()
+            pyplot.close()
+            return None, None
+        else:
+            # Return the figure to be saved in a multipage PDF.
+            # Caller MUST close pyplot.
+            return fig
 
 
 class ProcessExecChart(object):
@@ -683,154 +855,6 @@ class ProcessExecChart(object):
                         new_xticklabels.append(str(int(float(label)) + self.x_bounds[0]))
                 inset.set_xticklabels(new_xticklabels)
             shrink_inset_to_bbox(fig_renderer, fig, axis, inset)
-
-def draw_page(is_interactive, executions, cycles_executions,
-              instr_executions, titles, window_size, xlimits,
-              outliers, unique, common, changepoints, changepoint_means, classifications,
-              median, tukey, inset=False, zoom=True, legend_off=True,
-              core_cycles=(0,1,2,3), cycles_ylimits=None):
-    """Plot a page of benchmarks.
-    """
-
-    n_execs = len(executions)
-    if n_execs == 0:
-        print("WARNING: empty page")
-        return None
-
-    n_rows = int(math.ceil(float(len(executions)) / MAX_SUBPLOTS_PER_ROW))
-    n_cols = min(MAX_SUBPLOTS_PER_ROW, n_execs)
-
-    print('%g plots arranged in %g rows and %g columns.'
-          % (len(executions), n_rows, n_cols))
-
-    if xlimits is None:
-        xlimits_start = 0
-        xlimits_stop = len(executions[0])  # Assume all execs are the same length
-    else:
-        try:
-            xlimits_start, xlimits_stop = [int(x) for x in xlimits.split(',')]
-            if xlimits_start < 0 or xlimits_stop > len(executions[0]):
-                fatal_error('You specified %s as xlimits, but your data contains'
-                            ' iterations between 0 and %d' % (xlimits, len(executions[0])))
-        except ValueError:
-            fatal_error('Invalid xlimits pair: %s' % xlimits)
-
-    # Find the min and max y values across all wallclock time plots for this page.
-    y_min, y_max = get_unified_yrange(executions, xlimits_start, xlimits_stop, padding=Y_LIM_PADDING)
-
-    # Find y-limits for a zoomed-in plot for each execution on this page.
-    y_range_zoom = list()
-    if not zoom:  # User requested no zoom plot.
-        y_range_zoom = [(None, None)] * len(executions)
-    else:
-        for index in xrange(len(executions)):
-            if window_size > 0:
-                first_n = window_size
-            else:
-                first_n = int(len(executions[index]) * ZOOM_PROPORTION)
-            if outliers:
-                y_zoom_min = zoom_y_min(executions[index], outliers[index], start_from=first_n)
-                y_zoom_max = zoom_y_max(executions[index], outliers[index], start_from=first_n)
-            else:
-                y_zoom_min = min(executions[index][first_n:])
-                y_zoom_max = max(executions[index][first_n:])
-            y_range_zoom.append((y_zoom_min, y_zoom_max))
-
-    # Get unified y-ranges for the instrumentation data. Each VM may have more
-    # more than one set of instrumentation data (e.g. GC events, JIT
-    # compilation, etc.) and each VM instrument must have its own y-range.
-    if instr_executions:
-        instr_data_by_instrument = []
-        for execution in instr_executions:
-            if execution is None:
-                continue  # absent instr data for this pexec
-            instr_data_by_instrument = [list() for _ in execution]
-            break
-        for execution in instr_executions:
-            if execution is None:
-                for index in xrange(len(instr_data_by_instrument)):
-                    instr_data_by_instrument[index].append(None)
-            else:
-                for index, instrument_data in enumerate(execution):
-                    instr_data_by_instrument[index].append(instrument_data.data)
-        instr_y_ranges = list()
-        for chart_data in instr_data_by_instrument:
-            chart_data_stripped = [x for x in chart_data if x is not None]
-            instr_y_ranges.append(get_unified_yrange(chart_data_stripped, xlimits_start,
-                                                     xlimits_stop, padding=Y_LIM_PADDING))
-    else:
-        instr_y_ranges = None
-
-    fig = pyplot.figure()
-    # Set figure size here, so coordinates are correct before we draw insets.
-    if not is_interactive:
-        export_size = (EXPORT_SIZE_INCHES[0] * n_cols, EXPORT_SIZE_INCHES[1] * n_rows)
-        fig.set_size_inches(*export_size)
-
-    outer_grid = gridspec.GridSpec(n_rows, n_cols)
-    p_exec_charts = list()  # ProcessExecChart objects for this page.
-    index, row, col = 0, 0, 0
-    cycles_data, instr_data = None, None
-    outliers_exec, unique_exec, common_exec = None, None, None
-    changepoint_exec, changepoint_mean_exec = None, None
-    classification_exec = None
-    while index < n_execs:
-        data = executions[index]
-        if cycles_executions:
-            cycles_data = cycles_executions[index]
-        if instr_executions:
-            instr_data = instr_executions[index]
-        if outliers:
-            outliers_exec = outliers[index]
-        if unique:
-            unique_exec = unique[index]
-        if common:
-            common_exec = common[index]
-        if changepoints:
-            changepoint_exec = changepoints[index]
-            classification_exec = classifications[index]
-        if changepoint_means:
-            changepoint_mean_exec = changepoint_means[index]
-            classification_exec = classifications[index]
-        # Get axis and draw plot.
-        inner_grid = outer_grid[row, col]
-        x_bounds = [xlimits_start, xlimits_stop]
-        p_exec_charts.append(ProcessExecChart(inner_grid, data, cycles_data,
-                 instr_data, instr_y_ranges, titles[index], x_bounds, [y_min, y_max],
-                 y_range_zoom[index], window_size, outliers_exec, unique_exec,
-                 common_exec, changepoint_exec, changepoint_mean_exec,
-                 classification_exec, median, tukey, core_cycles, cycles_ylimits))
-        p_exec_charts[index].plot_stack()
-        col += 1
-        if col == MAX_SUBPLOTS_PER_ROW:
-            col = 0
-            row += 1
-        index = row * MAX_SUBPLOTS_PER_ROW + col
-    # Update page grid before drawing insets, to ensure bounding boxes are correct.
-    outer_grid.update(**SUBPLOT_PARAMS)
-    if inset:
-        for chart in p_exec_charts:
-            chart.plot_inset(chart.wallclock_axis, fig)
-    if tukey:  # Add Tukey band to legend.
-        fill_patch = matplotlib.patches.Patch(color=LINE_COLOUR,
-                                              alpha=FILL_ALPHA)
-        p_exec_charts[0].handles_labels[0].append(fill_patch)
-        p_exec_charts[0].handles_labels[1].append('$\pm3(90^\mathrm{th}-10^\mathrm{th} \mathrm{percentile})$')
-    # One legend per page.
-    if not legend_off:
-        fig.legend(p_exec_charts[0].handles_labels[0], p_exec_charts[0].handles_labels[1],
-                   loc='upper center', fontsize=LEGEND_FONTSIZE, ncol=10, borderaxespad=0)
-    if is_interactive:
-        mng = pyplot.get_current_fig_manager()
-        mng.resize(*mng.window.maxsize())
-        pyplot.show()
-        pyplot.close()
-        return None, None
-    else:
-        # Return the figure to be saved in a multipage PDF.
-        # Caller MUST close pyplot.
-        return fig
-
 
 def get_data_dictionaries(json_files, benchmarks=[], wallclock_only=False,
                           outliers=False, unique_outliers=False, changepoints=False):
