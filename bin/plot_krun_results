@@ -135,169 +135,186 @@ def get_instr_data(key, machine, instr_dir, pexec_idxs):
         return ret
 
 
-def main(is_interactive, data_dcts, plot_titles, window_size, outfile,
-         xlimits, with_outliers, unique_outliers, changepoints, changepoint_means,
-         median=False, tukey=False, inset=False, zoom=True, one_page=False,
-         legend_off=True, core_cycles=(0,1,2,3), cycles_ylimits=None):
-    """Determine which plots to put on each page of output.
-    Plot all data.
+class BenchmarkPlotDocument(object):
+    """A whole document of benchmark plots.
+    This class contains a list of document pages, each page contains a number
+    of process execution plots.
     """
 
-    pdf = None  # PDF output (for non-interactive mode).
+    def __init__(self, is_interactive, data_dcts, plot_titles, window_size, outfile,
+                 xlimits, with_outliers, unique_outliers, changepoints,
+                 changepoint_means, median=False, tukey=False, inset=False, zoom=True,
+                 one_page=False, legend_off=True, core_cycles=(0,1,2,3), cycles_ylimits=None):
+        self.is_interactive = is_interactive
+        self.plot_titles = plot_titles
+        self.window_size = window_size
+        self.pdf_filename = outfile
+        self.xlimits = xlimits
+        self.with_outliers = with_outliers
+        self.unique_outliers = unique_outliers
+        self.changepoints = changepoints
+        self.changepoint_means = changepoint_means
+        self.median = median
+        self.tukey = tukey
+        self.inset = inset
+        self.zoom = zoom
+        self.one_page = one_page
+        self.legend_off = legend_off
+        self.core_cycles = core_cycles
+        self.cycles_ylimits = cycles_ylimits
 
-    if not is_interactive:
-        pdf = PdfPages(outfile)
-        info_dict = pdf.infodict()
-        info_dict.update(PDF_INFO_DICT)
+        # Run sequences, outliers and subplot titles for each page we need to plot.
+        self.pages, self.all_subplot_titles = list(), list()
+        self.cycles_pages = list()
+        self.instr_pages = list()
+        self.all_outliers, self.all_common, self.all_unique = list(), list(), list()
+        self.all_changepoints, self.all_changepoint_means = list(), list()
+        self.all_classifications = list()
 
-    # Run sequences, outliers and subplot titles for each page we need to plot.
-    pages, all_subplot_titles = list(), list()
-    cycles_pages = list()
-    instr_pages = list()
-    all_outliers, all_common, all_unique = list(), list(), list()
-    all_changepoints, all_changepoint_means = list(), list()
-    all_classifications = list()
-
-    # By default, each benchmark from each machine is placed on a separate
-    # page. If the --one-page switch has been passed in, then we place
-    # all plots on a single page. In which case, we need to construct
-    # a flat list of all run sequences.
-    if one_page:
-        page, subplot_titles = list(), list()
-        cycles_page = list()
-        instr_page = list()
-        page_common, page_unique, page_outlier = list(), list(), list()
-        page_changepoints, page_changepoint_means = list(), list()
-        page_classifications = list()
-        for key in sorted(data_dcts['data']):
-            for machine in sorted(data_dcts['data'][key]):
-                for index, run_seq in enumerate(data_dcts['data'][key][machine]):
-                    page.append(run_seq)
-                    if data_dcts['cycles_counts'][key][machine]:
-                        cycles_page.append(data_dcts['cycles_counts'][key][machine][index])
-                    if data_dcts['instr_data'][key][machine]:
-                        instr_page.append(data_dcts['instr_data'][key][machine][index])
-                    subplot_titles.append(plot_titles[key][machine][index])
-                    # Collect outliers, if the user wishes to annotate them on
-                    # the plots. The draw_page() and draw_subplot() functions
-                    # expect either lists of outliers or None (if outliers are
-                    # not to be annotated).
+        # By default, each benchmark from each machine is placed on a separate
+        # page. If the --one-page switch has been passed in, then we place
+        # all plots on a single page. In which case, we need to construct
+        # a flat list of all run sequences.
+        if one_page:
+            page, subplot_titles = list(), list()
+            cycles_page = list()
+            instr_page = list()
+            page_common, page_unique, page_outlier = list(), list(), list()
+            page_changepoints, page_changepoint_means = list(), list()
+            page_classifications = list()
+            for key in sorted(data_dcts['data']):
+                for machine in sorted(data_dcts['data'][key]):
+                    for index, run_seq in enumerate(data_dcts['data'][key][machine]):
+                        page.append(run_seq)
+                        if data_dcts['cycles_counts'][key][machine]:
+                            cycles_page.append(data_dcts['cycles_counts'][key][machine][index])
+                        if data_dcts['instr_data'][key][machine]:
+                            instr_page.append(data_dcts['instr_data'][key][machine][index])
+                        subplot_titles.append(plot_titles[key][machine][index])
+                        # Collect outliers, if the user wishes to annotate them on
+                        # the plots. The draw_page() and draw_subplot() functions
+                        # expect either lists of outliers or None (if outliers are
+                        # not to be annotated).
+                        if with_outliers:
+                            page_outlier.append(data_dcts['all_outliers'][key][machine][index])
+                        else:
+                            page_outlier.append(None)
+                        if unique_outliers:
+                            page_common.append(data_dcts['common_outliers'][key][machine][index])
+                            page_unique.append(data_dcts['unique_outliers'][key][machine][index])
+                        else:
+                            page_common.append(None)
+                            page_unique.append(None)
+                        if changepoints:
+                            page_changepoints.append(data_dcts['changepoints'][key][machine][index])
+                            page_changepoint_means.append(None)
+                            page_classifications.append(data_dcts['classifications'][key][machine][index])
+                        if changepoint_means:
+                            page_changepoints.append(data_dcts['changepoints'][key][machine][index])
+                            page_changepoint_means.append(data_dcts['changepoint_means'][key][machine][index])
+                            page_classifications.append(data_dcts['classifications'][key][machine][index])
+                        else:
+                            page_changepoints.append(None)
+                            page_changepoint_means.append(None)
+                            page_classifications.append(None)
+            self.pages.append(page)
+            self.cycles_pages.append(cycles_page)
+            self.instr_pages.append(instr_page)
+            self.all_subplot_titles.append(subplot_titles)
+            self.all_outliers.append(page_outlier)
+            self.all_common.append(page_common)
+            self.all_unique.append(page_unique)
+            self.all_changepoints.append(page_changepoints)
+            self.all_changepoint_means.append(page_changepoint_means)
+            self.all_classifications.append(page_classifications)
+        else:  # Create multiple pages.
+            for key in sorted(data_dcts['data']):
+                for machine in sorted(data_dcts['data'][key]):
+                    self.pages.append(data_dcts['data'][key][machine])
+                    self.cycles_pages.append(data_dcts['cycles_counts'][key][machine])
+                    self.instr_pages.append(data_dcts['instr_data'][key][machine])
+                    self.all_subplot_titles.append(plot_titles[key][machine])
                     if with_outliers:
-                        page_outlier.append(data_dcts['all_outliers'][key][machine][index])
+                        self.all_outliers.append(data_dcts['all_outliers'][key][machine])
                     else:
-                        page_outlier.append(None)
+                        self.all_outliers.append(None)
                     if unique_outliers:
-                        page_common.append(data_dcts['common_outliers'][key][machine][index])
-                        page_unique.append(data_dcts['unique_outliers'][key][machine][index])
+                        self.all_common.append(data_dcts['common_outliers'][key][machine])
+                        self.all_unique.append(data_dcts['unique_outliers'][key][machine])
                     else:
-                        page_common.append(None)
-                        page_unique.append(None)
+                        self.all_common.append(None)
+                        self.all_unique.append(None)
                     if changepoints:
-                        page_changepoints.append(data_dcts['changepoints'][key][machine][index])
-                        page_changepoint_means.append(None)
-                        page_classifications.append(data_dcts['classifications'][key][machine][index])
-                    if changepoint_means:
-                        page_changepoints.append(data_dcts['changepoints'][key][machine][index])
-                        page_changepoint_means.append(data_dcts['changepoint_means'][key][machine][index])
-                        page_classifications.append(data_dcts['classifications'][key][machine][index])
+                        self.all_changepoints.append(data_dcts['changepoints'][key][machine])
+                        self.all_changepoint_means.append(None)
+                        self.all_classifications.append(data_dcts['classifications'][key][machine])
+                    elif changepoint_means:
+                        self.all_changepoints.append(data_dcts['changepoints'][key][machine])
+                        self.all_changepoint_means.append(data_dcts['changepoint_means'][key][machine])
+                        self.all_classifications.append(data_dcts['classifications'][key][machine])
                     else:
-                        page_changepoints.append(None)
-                        page_changepoint_means.append(None)
-                        page_classifications.append(None)
-        pages.append(page)
-        cycles_pages.append(cycles_page)
-        instr_pages.append(instr_page)
-        all_subplot_titles.append(subplot_titles)
-        all_outliers.append(page_outlier)
-        all_common.append(page_common)
-        all_unique.append(page_unique)
-        all_changepoints.append(page_changepoints)
-        all_changepoint_means.append(page_changepoint_means)
-        all_classifications.append(page_classifications)
-    else:  # Create multiple pages.
-        for key in sorted(data_dcts['data']):
-            for machine in sorted(data_dcts['data'][key]):
-                pages.append(data_dcts['data'][key][machine])
-                cycles_pages.append(data_dcts['cycles_counts'][key][machine])
-                instr_pages.append(data_dcts['instr_data'][key][machine])
-                all_subplot_titles.append(plot_titles[key][machine])
-                if with_outliers:
-                    all_outliers.append(data_dcts['all_outliers'][key][machine])
-                else:
-                    all_outliers.append(None)
-                if unique_outliers:
-                    all_common.append(data_dcts['common_outliers'][key][machine])
-                    all_unique.append(data_dcts['unique_outliers'][key][machine])
-                else:
-                    all_common.append(None)
-                    all_unique.append(None)
-                if changepoints:
-                    all_changepoints.append(data_dcts['changepoints'][key][machine])
-                    all_changepoint_means.append(None)
-                    all_classifications.append(data_dcts['classifications'][key][machine])
-                elif changepoint_means:
-                    all_changepoints.append(data_dcts['changepoints'][key][machine])
-                    all_changepoint_means.append(data_dcts['changepoint_means'][key][machine])
-                    all_classifications.append(data_dcts['classifications'][key][machine])
-                else:
-                    all_changepoints.append(None)
-                    all_changepoint_means.append(None)
-                    all_classifications.append(None)
+                        self.all_changepoints.append(None)
+                        self.all_changepoint_means.append(None)
+                        self.all_classifications.append(None)
 
-    # Draw each page and display (interactive mode) or save to disk.
-    try:
-        for index, page in enumerate(pages):
-            bmark, vm, mc = all_subplot_titles[index][0].split(', ')[:3]
-            print 'Plotting %s: %s (%s) on page %02d of %02d.' % \
-                  (mc, bmark, vm, index + 1, len(pages))
+    def _only_uncrashed(self, data, page, machine, benchmark, vm):
+        """Strip out subplots whose benchmark crashed."""
+        if data is None:
+            return None
+        uncrashed = list()
+        for index in xrange(len(page)):
+            if page[index]:
+                try:
+                    uncrashed.append(data[index])
+                except IndexError:  # Absent data.
+                    uncrashed.append([])
+            else:
+                if data == page:  # Stops repeated printing of warning.
+                    print('WARNING: requested process execution crashed: '
+                          '%s, %s, %s, %s' % (machine, benchmark, vm, index + 1))
+        return uncrashed
 
-            # Strip out indices where the benchmark crashed.
-            def only_uncrashed(data):
-                if data is None:
-                    return None
-                ret = list()
-                for i in xrange(len(page)):
-                    if page[i]:
-                        try:
-                            ret.append(data[i])
-                        except IndexError:
-                            # Absent data
-                            ret.append([])
-                    else:
-                        if data == page:  # Stops repeated printing of warning.
-                            print("WARNING: requested pexec crashed: "
-                                  "%s, %s, %s, %s" % (mc, bmark, vm, index + 1))
-                return ret
-
-            wct_page = only_uncrashed(page)
-            cycles_page = only_uncrashed(cycles_pages[index])
-            instr_page = only_uncrashed(instr_pages[index])
-            subplot_titles = only_uncrashed(all_subplot_titles[index])
-            outliers = only_uncrashed(all_outliers[index])
-            common = only_uncrashed(all_common[index])
-            unique = only_uncrashed(all_unique[index])
-            changepoints = only_uncrashed(all_changepoints[index])
-            changepoint_means = only_uncrashed(all_changepoint_means[index])
-            classifications = only_uncrashed(all_classifications[index])
-
-            fig = draw_page(is_interactive, wct_page, cycles_page,
-                                         instr_page, subplot_titles,
-                                         window_size, xlimits, outliers,
-                                         unique, common, changepoints,
-                                         changepoint_means, classifications,
-                                         median, tukey, inset, zoom, legend_off,
-                                         core_cycles, cycles_ylimits)
-            if fig is not None:
-                if not is_interactive:
-                    pdf.savefig(fig, dpi=fig.dpi, orientation='landscape',
-                                bbox_inches='tight')
-                    pyplot.close()
-    except KeyboardInterrupt:
-        pass  # Avoid printing a traceback.
-    finally:
-        if not is_interactive:
-            pdf.close()
-            print('Saved: %s' % outfile)
+    def plot_document(self):
+        """Draw each page and display (interactive mode) or save to disk."""
+        pdf = None  # PDF output (for non-interactive mode).
+        if not self.is_interactive:
+            pdf = PdfPages(self.pdf_filename)
+            info_dict = pdf.infodict()
+            info_dict.update(PDF_INFO_DICT)
+        try:
+            for index, page in enumerate(self.pages):
+                bmark, vm, mc = self.all_subplot_titles[index][0].split(', ')[:3]
+                print 'Plotting %s: %s (%s) on page %02d of %02d.' % \
+                      (mc, bmark, vm, index + 1, len(self.pages))
+                # Strip out any process executions that have crashed..
+                wct_page = self._only_uncrashed(page, page, mc, bmark, vm)
+                cycles_page = self._only_uncrashed(self.cycles_pages[index], page, mc, bmark, vm)
+                instr_page = self._only_uncrashed(self.instr_pages[index], page, mc, bmark, vm)
+                subplot_titles = self._only_uncrashed(self.all_subplot_titles[index], page, mc, bmark, vm)
+                outliers = self._only_uncrashed(self.all_outliers[index], page, mc, bmark, vm)
+                common = self._only_uncrashed(self.all_common[index], page, mc, bmark, vm)
+                unique = self._only_uncrashed(self.all_unique[index], page, mc, bmark, vm)
+                changepoints = self._only_uncrashed(self.all_changepoints[index], page, mc, bmark, vm)
+                changepoint_means = self._only_uncrashed(self.all_changepoint_means[index], page, mc, bmark, vm)
+                classifications = self._only_uncrashed(self.all_classifications[index], page, mc, bmark, vm)
+                # Draw this page.
+                fig = draw_page(self.is_interactive, wct_page, cycles_page,
+                                instr_page, subplot_titles, self.window_size, self.xlimits,
+                                outliers, unique, common, changepoints, changepoint_means,
+                                classifications, self.median, self.tukey, self.inset,
+                                self.zoom, self.legend_off, self.core_cycles,
+                                self.cycles_ylimits)
+                if fig is not None:
+                    if not self.is_interactive:
+                        pdf.savefig(fig, dpi=fig.dpi, orientation='landscape',
+                                    bbox_inches='tight')
+                        pyplot.close()
+        except KeyboardInterrupt:
+            pass  # Avoid printing a traceback and just save the file.
+        finally:
+            if not self.is_interactive:
+                pdf.close()
+                print 'Saved: %s' % self.pdf_filename
 
 
 class ProcessExecChart(object):
@@ -1312,21 +1329,12 @@ if __name__ == '__main__':
                     '-w or --window on the command line.' %
                     (options.window_size, len(first_pexec)))
 
-    main(options.outfile is None,
-         data,
-         plot_titles,
-         options.window_size,
-         options.outfile,
-         options.xlimits,
-         options.outliers,
-         options.unique_outliers,
-         options.changepoints,
-         options.changepoint_means,
-         median=options.median,
-         tukey=options.tukey,
-         inset=not options.inset,
-         zoom=not options.zoom,
-         one_page=options.one_page,
-         legend_off=options.legend_off,
-         core_cycles=core_cycles,
-         cycles_ylimits=cycles_ylimits)
+    document = BenchmarkPlotDocument(options.outfile is None, data, plot_titles,
+                                     options.window_size, options.outfile, options.xlimits,
+                                     options.outliers, options.unique_outliers,
+                                     options.changepoints, options.changepoint_means,
+                                     median=options.median, tukey=options.tukey,
+                                     inset=not options.inset, zoom=not options.zoom,
+                                     one_page=options.one_page, legend_off=options.legend_off,
+                                     core_cycles=core_cycles, cycles_ylimits=cycles_ylimits)
+    document.plot_document()
