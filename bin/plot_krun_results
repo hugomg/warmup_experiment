@@ -4,7 +4,6 @@ Plot data from Krun results file(s).
 """
 
 import argparse
-import datetime
 import math
 import matplotlib
 matplotlib.use('Agg')
@@ -22,7 +21,8 @@ from warmup.krun_results import pretty_print_machine, read_krun_results_file
 from warmup.outliers import get_window
 from warmup.plotting import add_inset_to_axis, add_margin_to_axes, axis_to_figure_transform
 from warmup.plotting import collide_rect, compute_grid_offsets, format_yticks_scientific
-from warmup.plotting import get_unified_yrange, style_axis, STYLE_DICT, zoom_y_min, zoom_y_max
+from warmup.plotting import get_unified_yrange, PDF_INFO_DICT, style_axis, STYLE_DICT
+from warmup.plotting import zoom_y_min, zoom_y_max
 from warmup.vm_instruments import INSTRUMENTATION_PARSERS
 
 pyplot.figure(tight_layout=True)
@@ -162,7 +162,8 @@ def main(is_interactive, data_dcts, plot_titles, window_size, outfile,
 
     if not is_interactive:
         pdf = PdfPages(outfile)
-        set_pdf_metadata(pdf)
+        info_dict = pdf.infodict()
+        info_dict.update(PDF_INFO_DICT)
 
     # Run sequences, outliers and subplot titles for each page we need to plot.
     pages, all_subplot_titles = list(), list()
@@ -857,20 +858,6 @@ def draw_page(is_interactive, executions, cycles_executions,
         # Return the figure to be saved in a multipage PDF.
         # Caller MUST close pyplot.
         return fig
-
-
-def set_pdf_metadata(pdf_document):
-    """Set metadata fields inside a PDF document.
-    """
-    info_dict = pdf_document.infodict()
-    info_dict['Title'] = 'Krun results'
-    info_dict['Author'] = 'soft-dev.org'
-    info_dict['Creator'] = 'http://github.com/softdevteam/warmup_experiment'
-    info_dict['Subject'] = 'Benchmarking results'
-    info_dict['Keywords']= ('benchmark experiment interpreter measurement ' +
-                            'software virtual machine')
-    info_dict['CreationDate'] = datetime.datetime.today()
-    info_dict['ModDate'] = datetime.datetime.today()
 
 
 def get_data_dictionaries(json_files, benchmarks=[], wallclock_only=False,

@@ -1,3 +1,4 @@
+import datetime
 import math
 import numpy
 
@@ -36,6 +37,16 @@ STYLE_DICT = {
     'grid.color': LIGHT_GRAY,
     'lines.linewidth': 1.0,
     'axes.linewidth': 1.0,
+}
+
+PDF_INFO_DICT = {
+    'Title': 'Krun results',
+    'Author': 'soft-dev.org',
+    'Creator': 'http://github.com/softdevteam/warmup_experiment',
+    'Subject': 'Benchmarking results',
+    'Keywords': 'benchmark experiment interpreter measurement software virtual machine',
+    'CreationDate': datetime.datetime.today(),
+    'ModDate': datetime.datetime.today(),
 }
 
 
