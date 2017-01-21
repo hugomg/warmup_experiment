@@ -3,7 +3,7 @@ import math
 import numpy
 
 from matplotlib import pyplot
-from matplotlib.ticker import ScalarFormatter, FormatStrFormatter
+from matplotlib.ticker import FormatStrFormatter, ScalarFormatter
 
 ZOOM_PERCENTILE_MIN = 10.0
 ZOOM_PERCENTILE_MAX = 90.0
