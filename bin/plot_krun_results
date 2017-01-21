@@ -111,99 +111,388 @@ EXPORT_SIZE_INCHES = [12, 10]
 DPI = 300
 
 
-def get_instr_data(key, machine, instr_dir, pexec_idxs):
-    """Get the instrumentation data summary for the specified process execution
-    indexes"""
-
-    bench, vm, variant = key.split(":")
-    ret = []
-    if vm in INSTRUMENTATION_PARSERS:
-        for pexec_idx in pexec_idxs:
-            file_ = os.path.join(instr_dir, "%s__%s__%s__%s.json.bz2" %
-                                 (bench, vm, variant, pexec_idx))
-            print("Loading: %s" % file_)
-            try:
-                js = read_krun_results_file(file_)
-            except IOError:
-                print("WARNING: Missing instrumentation data for: %s:%s:%s" % \
-                      (machine, key, pexec_idx))
-                ret.append(None)  # missing instr data
-                continue
-            parser = INSTRUMENTATION_PARSERS[vm](js)
-            ret.append(parser.chart_data)
-            del js  # This can be huge, so eagerly GC it
-        return ret
-
-
 class BenchmarkPlotDocument(object):
     """A whole document of benchmark plots.
     This class contains a list of document pages, each page contains a number
     of process execution plots.
     """
 
-    def __init__(self, is_interactive, data_dictionary, plot_titles, window_size,
-                 outfile, xlimits, with_outliers, unique_outliers, changepoints,
-                 changepoint_means, median=False, tukey=False, inset=False, zoom=True,
-                 one_page=False, legend_off=True, core_cycles=(0,1,2,3), cycles_ylimits=None):
+    def __init__(self, is_interactive, json_files, benchmarks, window_size,
+                 outfile, xlimits, plot_outliers, plot_unique, plot_changepoints,
+                 plot_changepoint_means, median=False, tukey=False, inset=False,
+                 zoom=True, one_page=False, legend_off=True, core_cycles=(0,1,2,3),
+                 cycles_ylimits=None, wallclock_only=False):
         self.is_interactive = is_interactive
-        self.plot_titles = plot_titles
         self.window_size = window_size
         self.pdf_filename = outfile
         self.xlimits = xlimits
-        self.data_dictionary = data_dictionary
         self.median = median
         self.tukey = tukey
         self.inset = inset
+        self.plot_changepoints = plot_changepoints
+        self.plot_changepoint_means = plot_changepoint_means
+        self.plot_outliers = plot_outliers
+        self.plot_unique = plot_unique
         self.zoom = zoom
         self.one_page = one_page
         self.legend_off = legend_off
         self.core_cycles = core_cycles
         self.cycles_ylimits = cycles_ylimits
+        self.wallclock_only = wallclock_only
         self.pages = list()  # List of DocumentPage objects.
-        if one_page:  # Marshal data into pages.
+        # Read in JSON files.
+        self.data_dictionary, self.plot_titles = \
+            self._get_data_dictionaries(json_files, benchmarks)
+        # Check window size is appropriate for the given data.
+        first_key = self.data_dictionary['data'].keys()[0]
+        first_mc = self.data_dictionary['data'][self.data_dictionary['data'].keys()[0]].keys()[0]
+        first_pexec = self.data_dictionary['data'][first_key][first_mc][0]
+        if window_size >= len(first_pexec):  # Assume all execs are the same length
+            fatal_error('Window size (%d) must be strictly less than the number '
+                        'of iterations in each process execution (%d). Use '
+                        '-w or --window on the command line.' %
+                        (self.window_size, len(first_pexec)))
+        # Marshal data into objects for plotting.
+        self._prepare_data()
+
+    def get_instr_data(self, key, machine, instr_dir, pexec_idxs):
+        """Get the instrumentation data summary for the specified process execution
+        indexes"""
+
+        bench, vm, variant = key.split(":")
+        ret = []
+        if vm in INSTRUMENTATION_PARSERS:
+            for pexec_idx in pexec_idxs:
+                file_ = os.path.join(instr_dir, "%s__%s__%s__%s.json.bz2" %
+                                     (bench, vm, variant, pexec_idx))
+                print("Loading: %s" % file_)
+                try:
+                    js = read_krun_results_file(file_)
+                except IOError:
+                    print("WARNING: Missing instrumentation data for: %s:%s:%s" % \
+                          (machine, key, pexec_idx))
+                    ret.append(None)  # missing instr data
+                    continue
+                parser = INSTRUMENTATION_PARSERS[vm](js)
+                ret.append(parser.chart_data)
+                del js  # This can be huge, so eagerly GC it
+            return ret
+
+    def _get_data_dictionaries(self, json_files, benchmarks=[]):
+        """Read a list of BZipped JSON files and return their contents as a
+        dictionaries of key -> machine name -> results.
+
+        This function returns ONLY the data that the user has requested on the
+        command line. Therefore, we check carefully that all data can be found
+        in the available Krun results files. Also, we pass back the title text
+        for each subplot.
+        """
+
+        data_dictionary = {'data': dict(),  'cycles_counts': dict(),
+                           'instr_data': dict(),  # Per-VM information.
+                           'changepoints': dict(), 'changepoint_means': dict(),
+                           'classifications': dict(), 'all_outliers': dict(),
+                           'common_outliers': dict(), 'unique_outliers': dict(),
+                          }
+
+        plot_titles = dict()  # All subplot titles.
+
+        # Find out what data the user requested.
+        # In bmark key -> machine  -> process execs format.
+        requested_data = dict()
+        if benchmarks != []:
+            for quintuplet in benchmarks:
+                try:
+                    machine, bmark, vm, variant, pexec = quintuplet.split(':')
+                except ValueError:
+                    fatal_error('Malformed benchmark: %s. The correct '
+                                'format is: machine:benchmark:vm:variant:pexec '
+                                'e.g. mc.example.com:fasta:PyPy:default-python:0')
+                key = ':'.join([bmark, vm, variant])
+                if key not in requested_data:
+                    requested_data[key] = dict()
+                if machine not in requested_data[key]:
+                    requested_data[key][machine] = list()
+                requested_data[key][machine].append(int(pexec))
+
+        # Collect the requested data from Krun results files.
+        for filename in json_files:
+            if not os.path.exists(filename):
+                fatal_error('File %s does not exist.' % filename)
+            print('Loading: %s' % filename)
+
+            # All benchmarking data from one Krun results file.
+            data = read_krun_results_file(filename)
+
+            # Check that data requested on the command line exists in the JSON.
+            if not self.wallclock_only and not ('core_cycle_counts' in data):
+                    fatal_error('Core cycle counts not stored in %s. '
+                                'Consider running this script with --wallclock-only.'
+                                % filename)
+            if self.plot_unique or self.plot_outliers:
+                if not ('common_outliers' in data and 'unique_outliers' in data and
+                        'all_outliers' in data):
+                    fatal_error('You requested that outliers be annotated '
+                                'on your plots, but file %s does not'
+                                'contain the relevant keys. Please run the '
+                                'mark_outliers_in_json.py script before '
+                                'proceeding.' % filename)
+            if self.plot_changepoints:
+                if 'changepoints' not in data:
+                    fatal_error('You requested that changepoints be annotated '
+                                'on your plots, but file %s does not'
+                                'contain the relevant keys. Please run the '
+                                'mark_changepoints_in_json.py script before '
+                                'proceeding.' % filename)
+
+            # Get machine name from Krun results file.
+            machine = data['audit']['uname'].split(' ')[1]
+            if '.' in machine:  # Strip domain names.
+                machine = machine.split('.')[0]
+            machine_name = pretty_print_machine(machine)
+
+            # Is there instrumentation data with this results file?
+            instr_data = False
+            filename_root = filename[:-len('_results.json.bz2')]
+            instr_dir = os.path.dirname(filename) + filename_root + '_instr_data'
+            if 'instr_data' not in data_dictionary:
+                data_dictionary['instr_data'] = dict()
+            if os.path.isdir(instr_dir):
+                print 'Collecting instrumentation data for %s from %s.' % \
+                    (filename, instr_dir)
+                instr_data = True
+            else:
+                print 'No VM instrumentation data is available.'
+
+            # Collect any results requested from this file.
+            if benchmarks == []:  # Chart all available data from this file.
+                for key in data['wallclock_times']:
+                    bmark = key.split(':')[0]
+                    if len(data['wallclock_times'][key]) == 0:
+                        print('Skipping: %s:%s (no executions)' % (machine, key))
+                    else:
+                        if key not in data_dictionary['data']:
+                            data_dictionary['data'][key] = dict()
+                            data_dictionary['cycles_counts'][key] = dict()
+                            data_dictionary['instr_data'][key] = dict()
+                            data_dictionary['changepoints'][key] = dict()
+                            data_dictionary['changepoint_means'][key] = dict()
+                            data_dictionary['classifications'][key] = dict()
+                            data_dictionary['all_outliers'][key] = dict()
+                            data_dictionary['common_outliers'][key] = dict()
+                            data_dictionary['unique_outliers'][key] = dict()
+                        data_dictionary['data'][key][machine] = data['wallclock_times'][key]
+                        print ('Found: %s:%s (%d executions).' % (machine, key,
+                                                len(data['wallclock_times'][key])))
+                        if self.wallclock_only:
+                            data_dictionary['cycles_counts'][key][machine] = None
+                            data_dictionary['instr_data'][key][machine] = None
+                        else:
+                            data_dictionary['cycles_counts'][key][machine] = data['core_cycle_counts'][key]
+                            if instr_data:
+                                data_dictionary['instr_data'][key][machine] =  \
+                                    self.get_instr_data(key, machine, instr_dir,
+                                        xrange(len(data['wallclock_times'][key])))
+                            else:
+                                data_dictionary['instr_data'][key][machine] = None
+                        if self.plot_changepoints or self.plot_changepoint_means:
+                            data_dictionary['changepoints'][key][machine] = data['changepoints'][key]
+                            data_dictionary['changepoint_means'][key][machine] = data['changepoint_means'][key]
+                            data_dictionary['classifications'][key][machine] = data['classifications'][key]
+                        else:
+                            data_dictionary['changepoints'][key][machine] = None
+                            data_dictionary['changepoint_means'][key][machine] = None
+                            data_dictionary['classifications'][key][machine] = None
+                        if self.plot_outliers or self.plot_unique:
+                            data_dictionary['all_outliers'][key][machine] = data['all_outliers'][key]
+                            data_dictionary['common_outliers'][key][machine] = data['common_outliers'][key]
+                            data_dictionary['unique_outliers'][key][machine] = data['unique_outliers'][key]
+                        else:
+                            data_dictionary['all_outliers'][key][machine] = None
+                            data_dictionary['common_outliers'][key][machine] = None
+                            data_dictionary['unique_outliers'][key][machine] = None
+                # Construct plot titles for all data in this file.
+                for key in data_dictionary['data']:
+                    if key not in plot_titles:
+                        plot_titles[key] = dict()
+                    if machine not in plot_titles[key]:
+                        plot_titles[key][machine] = list()
+                    benchmark_name = key.split(':')[0]
+                    if benchmark_name in BENCHMARKS:
+                        benchmark_name = BENCHMARKS[benchmark_name]
+                    else:
+                        benchmark_name = benchmark_name.title()
+
+                    # Add one title for each process execution
+                    try:
+                        num_p_execs = len(data_dictionary['data'][key][machine])
+                    except KeyError:
+                        pass  # no data for this
+                    else:
+                        for p_exec in xrange(num_p_execs):
+                            if self.plot_changepoints:
+                                classification = ' (%s)' % \
+                                    data['classifications'][key][p_exec]
+                            else:
+                                classification = ''
+                            title = '%s, %s, %s, Proc. exec. #%d%s' % \
+                                    (benchmark_name,
+                                     key.split(':')[1],
+                                     machine_name,
+                                     p_exec + 1,
+                                     classification)
+                            plot_titles[key][machine].append(title)
+            else:  # Chart only the data specified on command line.
+                for key in requested_data:
+                    if machine not in requested_data[key]:
+                        continue
+                    if key not in data['wallclock_times']:
+                        # Hope the key appears in another file, checked below.
+                        continue
+
+                    # Scaffold entries if not existing
+                    if key not in data_dictionary['data']:
+                        data_dictionary['data'][key] = dict()
+                        data_dictionary['cycles_counts'][key] = dict()
+                        data_dictionary['instr_data'][key] = dict()
+                        data_dictionary['changepoints'][key] = dict()
+                        data_dictionary['changepoint_means'][key] = dict()
+                        data_dictionary['all_outliers'][key] = dict()
+                        data_dictionary['common_outliers'][key] = dict()
+                        data_dictionary['unique_outliers'][key] = dict()
+                        data_dictionary['classifications'][key] = dict()
+
+                    if machine not in data_dictionary['data'][key]:
+                        data_dictionary['data'][key][machine] = list()
+                        if not self.wallclock_only:
+                            data_dictionary['cycles_counts'][key][machine] = list()
+                            data_dictionary['instr_data'][key][machine] = list()
+                        else:
+                            data_dictionary['cycles_counts'][key][machine] = None
+                            data_dictionary['instr_data'][key][machine] = None
+                        if self.plot_changepoints or self.plot_changepoint_means:
+                            data_dictionary['changepoints'][key][machine] = list()
+                            data_dictionary['changepoint_means'][key][machine] = list()
+                            data_dictionary['classifications'][key][machine] = list()
+                        else:
+                            data_dictionary['changepoints'][key][machine] = None
+                            data_dictionary['changepoint_means'][key][machine] = None
+                            data_dictionary['classifications'][key][machine] = None
+                        if self.plot_outliers or self.plot_unique:
+                            data_dictionary['all_outliers'][key][machine] = list()
+                            data_dictionary['common_outliers'][key][machine] = list()
+                            data_dictionary['unique_outliers'][key][machine] = list()
+                        else:
+                            data_dictionary['all_outliers'][key][machine] = None
+                            data_dictionary['common_outliers'][key][machine] = None
+                            data_dictionary['unique_outliers'][key][machine] = None
+
+                    if key not in plot_titles:
+                        plot_titles[key] = dict()
+                    if machine not in plot_titles[key]:
+                        plot_titles[key][machine] = list()
+                    if len(data['wallclock_times'][key]) == 0:
+                        print('WARNING: Skipping: %s from %s (no executions)' %
+                              (key, machine))
+                    else:
+                        benchmark_name = key.split(':')[0]
+                        if benchmark_name in BENCHMARKS:
+                            benchmark_name = BENCHMARKS[benchmark_name]
+                        else:
+                            benchmark_name = benchmark_name.title()
+                        for p_exec in requested_data[key][machine]:
+                            if p_exec >= len(data['wallclock_times'][key]):
+                                fatal_error('You requested that process execution %g '
+                                    'for benchmark %s from machine %s be plotted, but '
+                                    'the Krun results file for that machine only has '
+                                    '%g process executions for the benchmark.' %
+                                    (p_exec, key, machine, len(data['wallclock_times'][key])))
+                            # Add run sequence to data dictionary.
+                            print 'Adding run sequence to ', key, machine
+                            data_dictionary['data'][key][machine].append(data['wallclock_times'][key][p_exec])
+                            if not self.wallclock_only:
+                                data_dictionary['cycles_counts'][key][machine].append(data['core_cycle_counts'][key][p_exec])
+                                if instr_data:
+                                    data_dictionary['instr_data'][key][machine].append(
+                                        self.get_instr_data(key, machine, instr_dir, [p_exec])[0])
+                                else:
+                                    data_dictionary['instr_data'][key][machine] = None
+                                if self.plot_changepoints or self.plot_changepoint_means:
+                                    data_dictionary['changepoints'][key][machine].append(data['changepoints'][key][p_exec])
+                                    data_dictionary['changepoint_means'][key][machine].append(data['changepoint_means'][key][p_exec])
+                                    data_dictionary['classifications'][key][machine].append(data['classifications'][key][p_exec])
+                                if self.plot_outliers or self.plot_unique:
+                                    data_dictionary['all_outliers'][key][machine].append(data['all_outliers'][key][p_exec])
+                                    data_dictionary['common_outliers'][key][machine].append(data['common_outliers'][key][p_exec])
+                                    data_dictionary['unique_outliers'][key][machine].append(data['unique_outliers'][key][p_exec])
+
+                            # Construct plot title.
+                            title = '%s, %s, %s, Proc. exec. #%d' % \
+                                    (benchmark_name,
+                                     key.split(':')[1],
+                                     machine_name,
+                                     p_exec + 1)
+                            plot_titles[key][machine].append(title)
+
+        # Check that every benchmark that was requested has been found in the
+        # given Krun results files.
+        for key in requested_data:
+            for machine in requested_data[key]:
+                if (key not in data_dictionary['data'] or
+                    machine not in data_dictionary['data'][key]):
+                    fatal_error('You requested that plots for benchmark %s from '
+                                'machine %s be produced, but no such data was '
+                                'found in the Krun results files.' %
+                                (key, machine))
+
+        return data_dictionary, plot_titles
+
+    def _prepare_data(self):
+        any_cpts = self.plot_changepoints or self.plot_changepoint_means
+        if self.one_page:  # Marshal data into pages.
             subplot_titles = list()
             wallclock_page, cycles_page, instrumentation_page = list(), list(), list()
             page_common, page_unique, page_outlier = list(), list(), list()
             page_changepoints, page_changepoint_means = list(), list()
             page_classifications = list()
-            for key in sorted(data_dictionary['data']):
-                for machine in sorted(data_dictionary['data'][key]):
-                    for index, run_seq in enumerate(data_dictionary['data'][key][machine]):
+            for key in sorted(self.data_dictionary['data']):
+                for machine in sorted(self.data_dictionary['data'][key]):
+                    for index, run_seq in enumerate(self.data_dictionary['data'][key][machine]):
                         wallclock_page.append(run_seq)
-                        if data_dictionary['cycles_counts'][key][machine]:
-                            cycles_page.append(data_dictionary['cycles_counts'][key][machine][index])
-                        if data_dictionary['instr_data'][key][machine]:
-                            instrumentation_page.append(data_dictionary['instr_data'][key][machine][index])
-                        subplot_titles.append(plot_titles[key][machine][index])
-                        page_outlier.append(self._get_index_or_none(with_outliers,
+                        if self.data_dictionary['cycles_counts'][key][machine]:
+                            cycles_page.append(self.data_dictionary['cycles_counts'][key][machine][index])
+                        if self.data_dictionary['instr_data'][key][machine]:
+                            instrumentation_page.append(self.data_dictionary['instr_data'][key][machine][index])
+                        subplot_titles.append(self.plot_titles[key][machine][index])
+                        page_outlier.append(self._get_index_or_none(self.plot_outliers,
                                             'all_outliers', key, machine, index))
-                        page_unique.append(self._get_index_or_none(unique_outliers,
+                        page_unique.append(self._get_index_or_none(self.plot_unique,
                                            'unique_outliers', key, machine, index))
-                        page_common.append(self._get_index_or_none(unique_outliers,
+                        page_common.append(self._get_index_or_none(self.plot_unique,
                                            'common_outliers', key, machine, index))
-                        page_changepoints.append(self._get_index_or_none(changepoints or changepoint_means,
+                        page_changepoints.append(self._get_index_or_none(any_cpts,
                                                  'changepoints', key, machine, index))
-                        page_changepoint_means.append(self._get_index_or_none(changepoint_means,
+                        page_changepoint_means.append(self._get_index_or_none(self.plot_changepoint_means,
                                                       'changepoint_means', key, machine, index))
-                        page_classifications.append(self._get_index_or_none(changepoints or changepoint_means,
+                        page_classifications.append(self._get_index_or_none(any_cpts,
                                                     'classifications', key, machine, index))
             page = self._create_page(wallclock_page, cycles_page, instrumentation_page,
                        subplot_titles, page_outlier, page_unique, page_common,
                        page_changepoints, page_changepoint_means, page_classifications)
             self.pages.append(page)
         else:  # Create one page per Benchmark / VM / variant triplet.
-            for key in sorted(data_dictionary['data']):
-                for machine in sorted(data_dictionary['data'][key]):
+            for key in sorted(self.data_dictionary['data']):
+                for machine in sorted(self.data_dictionary['data'][key]):
                     page = self._create_page(self._get_key_or_none(True, 'data', key, machine),
                         self._get_key_or_none(True, 'cycles_counts', key, machine),
                         self._get_key_or_none(True, 'instr_data', key, machine),
-                        plot_titles[key][machine],
-                        self._get_key_or_none(with_outliers, 'all_outliers', key, machine),
-                        self._get_key_or_none(unique_outliers, 'unique_outliers', key, machine),
-                        self._get_key_or_none(unique_outliers, 'common_outliers', key, machine),
-                        self._get_key_or_none(changepoints or changepoint_means, 'changepoints', key, machine),
-                        self._get_key_or_none(changepoint_means, 'changepoint_means', key, machine),
-                        self._get_key_or_none(changepoints or changepoint_means, 'classifications', key, machine))
+                        self.plot_titles[key][machine],
+                        self._get_key_or_none(self.plot_outliers, 'all_outliers', key, machine),
+                        self._get_key_or_none(self.plot_unique, 'unique_outliers', key, machine),
+                        self._get_key_or_none(self.plot_unique, 'common_outliers', key, machine),
+                        self._get_key_or_none(any_cpts, 'changepoints', key, machine),
+                        self._get_key_or_none(self.plot_changepoint_means, 'changepoint_means', key, machine),
+                        self._get_key_or_none(any_cpts, 'classifications', key, machine))
                     self.pages.append(page)
 
     def _get_key_or_none(self, is_key_requested, json_key, triplet_key, machine,):
@@ -816,278 +1105,6 @@ class ProcessExecChart(object):
                 inset.set_xticklabels(new_xticklabels)
             shrink_inset_to_bbox(fig_renderer, fig, axis, inset)
 
-def get_data_dictionaries(json_files, benchmarks=[], wallclock_only=False,
-                          outliers=False, unique_outliers=False, changepoints=False):
-    """Read a list of BZipped JSON files and return their contents as a
-    dictionaries of key -> machine name -> results.
-
-    This function returns ONLY the data that the user has requested on the
-    command line. Therefore, we check carefully that all data can be found
-    in the available Krun results files. Also, we pass back the title text
-    for each subplot.
-    """
-
-    data_dictionary = {'data': dict(),  'cycles_counts': dict(),
-                       'instr_data': dict(),  # Per-VM information.
-                       'changepoints': dict(), 'changepoint_means': dict(),
-                       'classifications': dict(), 'all_outliers': dict(),
-                       'common_outliers': dict(), 'unique_outliers': dict(),
-                      }
-
-    plot_titles = dict()  # All subplot titles.
-
-    # Find out what data the user requested.
-    # In bmark key -> machine  -> process execs format.
-    requested_data = dict()
-    if benchmarks != []:
-        for quintuplet in benchmarks:
-            try:
-                machine, bmark, vm, variant, pexec = quintuplet.split(':')
-            except ValueError:
-                fatal_error('Malformed benchmark: %s. The correct '
-                            'format is: machine:benchmark:vm:variant:pexec '
-                            'e.g. mc.example.com:fasta:PyPy:default-python:0')
-            key = ':'.join([bmark, vm, variant])
-            if key not in requested_data:
-                requested_data[key] = dict()
-            if machine not in requested_data[key]:
-                requested_data[key][machine] = list()
-            requested_data[key][machine].append(int(pexec))
-
-    # Collect the requested data from Krun results files.
-    for filename in json_files:
-        if not os.path.exists(filename):
-            fatal_error('File %s does not exist.' % filename)
-        print('Loading: %s' % filename)
-
-        # All benchmarking data from one Krun results file.
-        data = read_krun_results_file(filename)
-
-        # Check that data requested on the command line exists in the JSON.
-        if not wallclock_only and not ('core_cycle_counts' in data):
-                fatal_error('Core cycle counts not stored in %s. '
-                            'Consider running this script with --wallclock-only.'
-                            % filename)
-        if unique_outliers or outliers:
-            if not ('common_outliers' in data and 'unique_outliers' in data and
-                    'all_outliers' in data):
-                fatal_error('You requested that outliers be annotated '
-                            'on your plots, but file %s does not'
-                            'contain the relevant keys. Please run the '
-                            'mark_outliers_in_json.py script before '
-                            'proceeding.' % filename)
-        if changepoints:
-            if 'changepoints' not in data:
-                fatal_error('You requested that changepoints be annotated '
-                            'on your plots, but file %s does not'
-                            'contain the relevant keys. Please run the '
-                            'mark_changepoints_in_json.py script before '
-                            'proceeding.' % filename)
-
-        # Get machine name from Krun results file.
-        machine = data['audit']['uname'].split(' ')[1]
-        if '.' in machine:  # Strip domain names.
-            machine = machine.split('.')[0]
-        machine_name = pretty_print_machine(machine)
-
-        # Is there instrumentation data with this results file?
-        instr_data = False
-        filename_root = filename[:-len('_results.json.bz2')]
-        instr_dir = os.path.dirname(filename) + filename_root + '_instr_data'
-        if 'instr_data' not in data_dictionary:
-            data_dictionary['instr_data'] = dict()
-        if os.path.isdir(instr_dir):
-            print 'Collecting instrumentation data for %s from %s.' % \
-                (filename, instr_dir)
-            instr_data = True
-        else:
-            print 'No VM instrumentation data is available.'
-
-        # Collect any results requested from this file.
-        if benchmarks == []:  # Chart all available data from this file.
-            for key in data['wallclock_times']:
-                bmark = key.split(':')[0]
-                if len(data['wallclock_times'][key]) == 0:
-                    print('Skipping: %s:%s (no executions)' % (machine, key))
-                else:
-                    if key not in data_dictionary['data']:
-                        data_dictionary['data'][key] = dict()
-                        data_dictionary['cycles_counts'][key] = dict()
-                        data_dictionary['instr_data'][key] = dict()
-                        data_dictionary['changepoints'][key] = dict()
-                        data_dictionary['changepoint_means'][key] = dict()
-                        data_dictionary['classifications'][key] = dict()
-                        data_dictionary['all_outliers'][key] = dict()
-                        data_dictionary['common_outliers'][key] = dict()
-                        data_dictionary['unique_outliers'][key] = dict()
-                    data_dictionary['data'][key][machine] = data['wallclock_times'][key]
-                    print ('Found: %s:%s (%d executions).' % (machine, key,
-                                            len(data['wallclock_times'][key])))
-                    if wallclock_only:
-                        data_dictionary['cycles_counts'][key][machine] = None
-                        data_dictionary['instr_data'][key][machine] = None
-                    else:
-                        data_dictionary['cycles_counts'][key][machine] = data['core_cycle_counts'][key]
-                        if instr_data:
-                            data_dictionary['instr_data'][key][machine] =  \
-                                get_instr_data(
-                                    key, machine, instr_dir,
-                                    xrange(len(data['wallclock_times'][key])))
-                        else:
-                            data_dictionary['instr_data'][key][machine] = None
-                    if changepoints:
-                        data_dictionary['changepoints'][key][machine] = data['changepoints'][key]
-                        data_dictionary['changepoint_means'][key][machine] = data['changepoint_means'][key]
-                        data_dictionary['classifications'][key][machine] = data['classifications'][key]
-                    else:
-                        data_dictionary['changepoints'][key][machine] = None
-                        data_dictionary['changepoint_means'][key][machine] = None
-                        data_dictionary['classifications'][key][machine] = None
-                    if outliers or unique_outliers:
-                        data_dictionary['all_outliers'][key][machine] = data['all_outliers'][key]
-                        data_dictionary['common_outliers'][key][machine] = data['common_outliers'][key]
-                        data_dictionary['unique_outliers'][key][machine] = data['unique_outliers'][key]
-                    else:
-                        data_dictionary['all_outliers'][key][machine] = None
-                        data_dictionary['common_outliers'][key][machine] = None
-                        data_dictionary['unique_outliers'][key][machine] = None
-            # Construct plot titles for all data in this file.
-            for key in data_dictionary['data']:
-                if key not in plot_titles:
-                    plot_titles[key] = dict()
-                if machine not in plot_titles[key]:
-                    plot_titles[key][machine] = list()
-                benchmark_name = key.split(':')[0]
-                if benchmark_name in BENCHMARKS:
-                    benchmark_name = BENCHMARKS[benchmark_name]
-                else:
-                    benchmark_name = benchmark_name.title()
-
-                # Add one title for each process execution
-                try:
-                    num_p_execs = len(data_dictionary['data'][key][machine])
-                except KeyError:
-                    pass  # no data for this
-                else:
-                    for p_exec in xrange(num_p_execs):
-                        if changepoints:
-                            classification = ' (%s)' % \
-                                data['classifications'][key][p_exec]
-                        else:
-                            classification = ''
-                        title = '%s, %s, %s, Proc. exec. #%d%s' % \
-                                (benchmark_name,
-                                 key.split(':')[1],
-                                 machine_name,
-                                 p_exec + 1,
-                                 classification)
-                        plot_titles[key][machine].append(title)
-        else:  # Chart only the data specified on command line.
-            for key in requested_data:
-                if machine not in requested_data[key]:
-                    continue
-                if key not in data['wallclock_times']:
-                    # Hope the key appears in another file, checked below.
-                    continue
-
-                # Scaffold entries if not existing
-                if key not in data_dictionary['data']:
-                    data_dictionary['data'][key] = dict()
-                    data_dictionary['cycles_counts'][key] = dict()
-                    data_dictionary['instr_data'][key] = dict()
-                    data_dictionary['changepoints'][key] = dict()
-                    data_dictionary['changepoint_means'][key] = dict()
-                    data_dictionary['all_outliers'][key] = dict()
-                    data_dictionary['common_outliers'][key] = dict()
-                    data_dictionary['unique_outliers'][key] = dict()
-                    data_dictionary['classifications'][key] = dict()
-
-                if machine not in data_dictionary['data'][key]:
-                    data_dictionary['data'][key][machine] = list()
-                    if not wallclock_only:
-                        data_dictionary['cycles_counts'][key][machine] = list()
-                        data_dictionary['instr_data'][key][machine] = list()
-                    else:
-                        data_dictionary['cycles_counts'][key][machine] = None
-                        data_dictionary['instr_data'][key][machine] = None
-                    if changepoints:
-                        data_dictionary['changepoints'][key][machine] = list()
-                        data_dictionary['changepoint_means'][key][machine] = list()
-                        data_dictionary['classifications'][key][machine] = list()
-                    else:
-                        data_dictionary['changepoints'][key][machine] = None
-                        data_dictionary['changepoint_means'][key][machine] = None
-                        data_dictionary['classifications'][key][machine] = None
-                    if outliers or unique_outliers:
-                        data_dictionary['all_outliers'][key][machine] = list()
-                        data_dictionary['common_outliers'][key][machine] = list()
-                        data_dictionary['unique_outliers'][key][machine] = list()
-                    else:
-                        data_dictionary['all_outliers'][key][machine] = None
-                        data_dictionary['common_outliers'][key][machine] = None
-                        data_dictionary['unique_outliers'][key][machine] = None
-
-                if key not in plot_titles:
-                    plot_titles[key] = dict()
-                if machine not in plot_titles[key]:
-                    plot_titles[key][machine] = list()
-                if len(data['wallclock_times'][key]) == 0:
-                    print('WARNING: Skipping: %s from %s (no executions)' %
-                          (key, machine))
-                else:
-                    benchmark_name = key.split(':')[0]
-                    if benchmark_name in BENCHMARKS:
-                        benchmark_name = BENCHMARKS[benchmark_name]
-                    else:
-                        benchmark_name = benchmark_name.title()
-                    for p_exec in requested_data[key][machine]:
-                        if p_exec >= len(data['wallclock_times'][key]):
-                            fatal_error('You requested that process execution %g '
-                                'for benchmark %s from machine %s be plotted, but '
-                                'the Krun results file for that machine only has '
-                                '%g process executions for the benchmark.' %
-                                (p_exec, key, machine, len(data['wallclock_times'][key])))
-                        # Add run sequence to data dictionary.
-                        print 'Adding run sequence to ', key, machine
-                        data_dictionary['data'][key][machine].append(data['wallclock_times'][key][p_exec])
-                        if not wallclock_only:
-                            data_dictionary['cycles_counts'][key][machine].append(data['core_cycle_counts'][key][p_exec])
-                            if instr_data:
-                                data_dictionary['instr_data'][key][machine].append(
-                                    get_instr_data(key, machine, instr_dir, [p_exec])[0])
-                            else:
-                                data_dictionary['instr_data'][key][machine] = None
-                            if changepoints:
-                                data_dictionary['changepoints'][key][machine].append(data['changepoints'][key][p_exec])
-                                data_dictionary['changepoint_means'][key][machine].append(data['changepoint_means'][key][p_exec])
-                                data_dictionary['classifications'][key][machine].append(data['classifications'][key][p_exec])
-                            if outliers or unique_outliers:
-                                data_dictionary['all_outliers'][key][machine].append(data['all_outliers'][key][p_exec])
-                                data_dictionary['common_outliers'][key][machine].append(data['common_outliers'][key][p_exec])
-                                data_dictionary['unique_outliers'][key][machine].append(data['unique_outliers'][key][p_exec])
-
-                        # Construct plot title.
-                        title = '%s, %s, %s, Proc. exec. #%d' % \
-                                (benchmark_name,
-                                 key.split(':')[1],
-                                 machine_name,
-                                 p_exec + 1)
-                        plot_titles[key][machine].append(title)
-
-    # Check that every benchmark that was requested has been found in the
-    # given Krun results files.
-    for key in requested_data:
-        for machine in requested_data[key]:
-            if (key not in data_dictionary['data'] or
-                machine not in data_dictionary['data'][key]):
-                fatal_error('You requested that plots for benchmark %s from '
-                            'machine %s be produced, but no such data was '
-                            'found in the Krun results files.' %
-                            (key, machine))
-
-    return data_dictionary, plot_titles
-
-
 def create_cli_parser():
     """Create a parser to deal with command line switches.
     """
@@ -1299,26 +1316,12 @@ if __name__ == '__main__':
         AXIS_FONTSIZE = 14
         BASE_FONTSIZE = 13
 
-    data, plot_titles = get_data_dictionaries(options.json_files[0],
-                            options.benchmarks, options.wallclock,
-                            options.outliers, options.unique_outliers,
-                            options.changepoints or options.changepoint_means)
-
-    first_key = data['data'].keys()[0]
-    first_mc = data['data'][data['data'].keys()[0]].keys()[0]
-    first_pexec = data['data'][first_key][first_mc][0]
-    if options. window_size >= len(first_pexec):  # Assume all execs are the same length
-        fatal_error('Window size (%d) must be strictly less than the number '
-                    'of iterations in each process execution (%d). Use '
-                    '-w or --window on the command line.' %
-                    (options.window_size, len(first_pexec)))
-
-    document = BenchmarkPlotDocument(options.outfile is None, data, plot_titles,
-                                     options.window_size, options.outfile, options.xlimits,
-                                     options.outliers, options.unique_outliers,
-                                     options.changepoints, options.changepoint_means,
-                                     median=options.median, tukey=options.tukey,
-                                     inset=not options.inset, zoom=not options.zoom,
-                                     one_page=options.one_page, legend_off=options.legend_off,
-                                     core_cycles=core_cycles, cycles_ylimits=cycles_ylimits)
+    document = BenchmarkPlotDocument(options.outfile is None, options.json_files[0],
+                    options.benchmarks, options.window_size, options.outfile,
+                    options.xlimits, options.outliers, options.unique_outliers,
+                    options.changepoints, options.changepoint_means, median=options.median,
+                    tukey=options.tukey, inset=not options.inset, zoom=not options.zoom,
+                    one_page=options.one_page, legend_off=options.legend_off,
+                    core_cycles=core_cycles, cycles_ylimits=cycles_ylimits,
+                    wallclock_only=options.wallclock)
     document.plot_document()
