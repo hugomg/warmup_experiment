@@ -63,17 +63,17 @@ MEDIAN_COLOUR = '#0072B2'
 FILL_ALPHA = 0.2
 
 OUTLIER_MARKER = 'o'
-OUTLIER_COLOR = 'r'
+OUTLIER_COLOUR = 'r'
 OUTLIER_SIZE = 80
-UNIQUE_COLOR = 'g'
+UNIQUE_COLOUR = 'g'
 UNIQUE_MARKER = 'o'
 UNIQUE_SIZE = 80
-COMMON_COLOR = 'r'
+COMMON_COLOUR = 'r'
 COMMON_MARKER = '*'
 COMMON_SIZE = 80
 
 CHANGEPOINT_LINE_STYLE = '-'
-CHANGEPOINT_LINE_COLOR = 'r'
+CHANGEPOINT_LINE_COLOUR = 'r'
 
 from warmup.plotting import ZORDER_GRID
 ZORDER_DATA = 5
@@ -513,18 +513,18 @@ class ProcessExecChart(object):
             common_marker = OUTLIER_MARKER
         if self.outliers:
             axis.scatter(self.outliers[0], self.wallclock_data[self.outliers[1]],
-                         color=OUTLIER_COLOR, marker=outlier_marker, s=size,
+                         color=OUTLIER_COLOUR, marker=outlier_marker, s=size,
                          label='Outliers', zorder=ZORDER_MARKERS)
         if self.unique:
             pc_unique = float(len(self.unique[1]) - self.window_size) / float(len(self.wallclock_data)) * 100.0
             axis.scatter(self.unique[0], self.wallclock_data[self.unique[1]],
-                         color=UNIQUE_COLOR, marker=unique_marker, s=size,
+                         color=UNIQUE_COLOUR, marker=unique_marker, s=size,
                          label=('Unique outliers (${%.2f}\\%%$)' % pc_unique),
                          zorder=ZORDER_MARKERS)
         if self.common:
             pc_common = float(len(self.common[1])) / float(len(self.wallclock_data)) * 100.0
             axis.scatter(self.common[0], self.wallclock_data[self.common[1]],
-                         color=COMMON_COLOR, marker=common_marker, s=size,
+                         color=COMMON_COLOUR, marker=common_marker, s=size,
                          label=('Common outliers (${%.2f}\\%%$)' % pc_common),
                          zorder=ZORDER_MARKERS)
 
@@ -536,9 +536,9 @@ class ProcessExecChart(object):
         if self.changepoint_means:
             for index, x_location in enumerate(self.changepoints):
                 axis.axvline(x_location, linestyle=CHANGEPOINT_LINE_STYLE,
-                             zorder=ZORDER_CHANGEPOINTS, color=CHANGEPOINT_LINE_COLOR,
+                             zorder=ZORDER_CHANGEPOINTS, color=CHANGEPOINT_LINE_COLOUR,
                              linewidth=LINE_WIDTH)
-            lines = LineCollection(self.segment_means, color=CHANGEPOINT_LINE_COLOR,
+            lines = LineCollection(self.segment_means, color=CHANGEPOINT_LINE_COLOUR,
                                    zorder=ZORDER_CHANGEPOINTS,
                                    linewidths=[LINE_WIDTH
                                    for _ in xrange(len(self.segment_means))])
