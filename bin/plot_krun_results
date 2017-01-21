@@ -1106,42 +1106,28 @@ class ProcessExecChart(object):
             shrink_inset_to_bbox(fig_renderer, fig, axis, inset)
 
 def create_cli_parser():
-    """Create a parser to deal with command line switches.
-    """
+    """Create a parser to deal with command line switches."""
     script = os.path.basename(__file__)
     description = (('Plot data from Krun results file(s).'
                     '\n\nExample usage:\n\t$ python %s results1.json.bz2\n'
                     '\t$ python %s -i --window 250 --median --tukey '
                     '--with-outliers results1.json.bz2 results2.json.bz2\n'
-                    '\t$ python %s -b binarytrees:Hotspot:default-java'
+                    '\t$ python %s -b binarytrees:Hotspot:default-java:0'
                     ' results.json.bz2\n') %
                    (script, script, script))
     parser = argparse.ArgumentParser(description)
-    parser.add_argument('json_files',
-                        nargs='+',
-                        action='append',
-                        default=[],
-                        type=str,
-                        help='One or more Krun result files.')
-    parser.add_argument('--outfile', '-o',
-                        action='store',
-                        dest='outfile',
-                        default=None,
-                        type=str,
-                        help=('Name of the PDF file to write to. If no file is '
-                              'specified, charts will be displayed interactively '
-                              'and not written to disk.'))
-    parser.add_argument('--wallclock-only',
-                        action='store_true',
-                        dest='wallclock',
-                        default=False,
-                        help='Only plot wallclock times.')
-    parser.add_argument('--benchmark', '-b',
-                        action='append',
-                        dest='benchmarks',
-                        default=[],
-                        type=str,
-                        help='Only draw charts for specific '
+    parser.add_argument('json_files', nargs='+', action='append', default=[],
+                        type=str, help='one or more Krun result files.')
+    parser.add_argument('--outfile', '-o', action='store', dest='outfile',
+                        default=None, type=str,
+                        help='name of the PDF file to write to. If no file is '
+                             'specified, charts will be displayed interactively '
+                             'and not written to disk.')
+    parser.add_argument('--wallclock-only', action='store_true', dest='wallclock',
+                        default=False, help='only plot wallclock times.')
+    parser.add_argument('--benchmark', '-b', action='append', dest='benchmarks',
+                        default=[], type=str,
+                        help='only draw charts for specific '
                              'machine:benchmark:vm:variant:pexec quintuplet(s). '
                              'e.g. "-b mc1.example.com:binarytrees:Hotspot:default-java:0. '
                              'will chart the first process execution of the '
@@ -1149,106 +1135,65 @@ def create_cli_parser():
                              'VM, as measured on machine mc1. '
                              'This switch can be used repeatedly to chart '
                              'a number of benchmarks.')
-    parser.add_argument('--one-page',
-                        action='store_true',
-                        dest='one_page',
-                        default=False,
-                        help='Place all charts on a single page')
-    parser.add_argument('--window', '-w',
-                        action='store',
-                        dest='window_size',
-                        default=200,
-                        type=int,
-                        help='Size of the sliding window used to draw a '
+    parser.add_argument('--one-page', action='store_true', dest='one_page',
+                        default=False, help='place all charts on a single page')
+    parser.add_argument('--window', '-w', action='store', dest='window_size',
+                        default=200, type=int,
+                        help='size of the sliding window used to draw a '
                              'rolling median and/or Tukey interval.')
-    parser.add_argument('--median', '-m',
-                        action='store_true',
-                        dest='median',
-                        default=False,
-                        help='Draw a rolling median.')
-    parser.add_argument('--tukey', '-t',
-                        action='store_true',
-                        dest='tukey',
-                        default=False,
-                        help=('Draw an interval around the rolling median '
-                              'which indicates the limits of "valid" data '
-                              'points (i.e. data not identified as outliers).'))
-    parser.add_argument('--xlimits', '-x',
-                        action='store',
-                        dest='xlimits',
-                        default=None,
-                        type=str,
-                        help="Specify X-axis limits as a comma separated pair "
-                             "'start,end'. Samples start from 0. e.g. "
-                             "'-x 100,130' will show samples in the range "
-                             "100 to 130.")
-    parser.add_argument('--no-inset',
-                        action='store_true',
-                        dest='inset',
-                        default=False,
-                        help='Do not place a small chart plotting the first few '
+    parser.add_argument('--median', '-m', action='store_true', dest='median',
+                        default=False, help='draw a rolling median.')
+    parser.add_argument('--tukey', '-t', action='store_true', dest='tukey', default=False,
+                        help='draw an interval around the rolling median '
+                             'which indicates the limits of "valid" data '
+                             'points (i.e. data not identified as outliers).')
+    parser.add_argument('--xlimits', '-x', action='store', dest='xlimits', default=None,
+                        type=str, help='specify X-axis limits as a comma separated pair '
+                                       '"start,end". Samples start from 0. e.g. '
+                                        '"-x 100,130" will show samples in the range '
+                                        '100 to 130.')
+    parser.add_argument('--no-inset', action='store_true', dest='inset', default=False,
+                        help='do not place a small chart plotting the first few '
                              'values of each process execution in an thumbnail '
                              'inside each plot. The inset is intended to make it '
                              'easier to see detail during the warm-up phase of '
                              'each benchmark. Insets will not be drawn over '
                              'data measurements.')
-    parser.add_argument('--no-zoom',
-                        action='store_true',
-                        dest='zoom',
-                        default=False,
-                        help='Do not render a small chart showing a "zoomed in" '
+    parser.add_argument('--no-zoom', action='store_true', dest='zoom', default=False,
+                        help='do not render a small chart showing a "zoomed in" '
                              'view of your measurements. This chart is intended '
                              'to show more detail in the "fast" iterations of '
                              'benchmarks with good warmup behaviour. ')
-    parser.add_argument('--with-outliers',
-                        action='store_true',
-                        dest='outliers',
-                        default=False,
-                        help='Annotate outliers. Only use this if your '
-                             'Krun results file contains outlier information.')
-    parser.add_argument('--with-unique-outliers',
-                        action='store_true',
-                        dest='unique_outliers',
-                        default=False,
-                        help='Annotate outliers common to multiple '
-                             'executions and those unique to single '
-                             'executions differently. Only use this if '
-                             'your Krun results file contains outlier '
-                             'information.')
-    parser.add_argument('--with-changepoint-means',
-                        action='store_true',
-                        dest='changepoint_means',
-                        default=False,
-                        help='Annotate changepoints and their means as vertical '
+    parser.add_argument('--with-outliers', action='store_true', dest='outliers',
+                        default=False, help='annotate outliers. Only use this if '
+                                             'your Krun results file contains '
+                                             'outlier information.')
+    parser.add_argument('--with-unique-outliers', action='store_true',
+                        dest='unique_outliers', default=False,
+                        help='annotate outliers common to multiple executions '
+                             'and those unique to single executions differently. '
+                             'Only use this if your Krun results file contains '
+                             'outlier information.')
+    parser.add_argument('--with-changepoint-means', action='store_true',
+                        dest='changepoint_means', default=False,
+                        help='annotate changepoints and their means as vertical '
                              'and horizontal lines. Only use this if your Krun '
                              'results file contains changepoint information.')
-    parser.add_argument('--with-changepoints',
-                        action='store_true',
-                        dest='changepoints',
-                        default=False,
-                        help='Annotate changepoints. Only use this if your Krun '
-                             'results file contains changepoint information.')
-    parser.add_argument('--no-legend',
-                        action='store_true',
-                        dest='legend_off',
-                        default=True,
-                        help='Do not draw a legend.')
-    parser.add_argument('--export-size',
-                        action='store',
-                        default='12, 10',
-                        help="Set the total size (comma separated pair, "
-                             "in inches) of each process execution's "
-                             "plots in the output.")
-    parser.add_argument('--cycles-ylimits',
-                        action='store',
-                        default=None,
-                        help="Set the y-axis range for core cycle plots "
-                             "(comma separated pair)")
-    parser.add_argument('--core-cycles',
-                        action='store',
-                        dest='core_cycles',
-                        default=None,
-                        help='Only plot the core cycles for specified cores'
+    parser.add_argument('--with-changepoints', action='store_true', dest='changepoints',
+                        default=False, help='annotate changepoints. Only use this '
+                                            'if your Krun results file contains '
+                                            'changepoint information.')
+    parser.add_argument('--no-legend', action='store_true', dest='legend_off',
+                        default=True, help='do not draw a legend.')
+    parser.add_argument('--export-size', action='store', default='12, 10',
+                        help='set the total size (comma separated pair, '
+                             'in inches) of each process execution\'s '
+                             'plots in the output.')
+    parser.add_argument('--cycles-ylimits', action='store', default=None,
+                        help='set the y-axis range for core cycle plots '
+                             '(comma separated pair)')
+    parser.add_argument('--core-cycles', action='store', dest='core_cycles', default=None,
+                        help='only plot the core cycles for specified cores'
                               '(comma separated). e.g: 0,1,2,3')
     return parser
 
