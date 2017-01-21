@@ -14,6 +14,8 @@ DARK_GRAY = '.15'
 LIGHT_GRAY = '.8'
 BASE_FONTSIZE = 8
 
+SIMPLE_YTICK_FORMAT = '%.5f'
+
 STYLE_DICT = {
     'figure.facecolor': 'white',
     'text.color': DARK_GRAY,
@@ -146,7 +148,7 @@ def format_yticks_scientific(axis):
         formatter.set_powerlimits((-6, 6))
         axis.yaxis.set_major_formatter(formatter)
     else:
-        formatter = FormatStrFormatter('%.5f')
+        formatter = FormatStrFormatter(SIMPLE_YTICK_FORMAT)
         axis.yaxis.set_major_formatter(formatter)
     pyplot.draw()
     offset = axis.yaxis.get_offset_text().get_text()

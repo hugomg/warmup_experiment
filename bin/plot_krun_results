@@ -74,9 +74,6 @@ UNIQUE_SIZE = 80
 COMMON_COLOR = 'r'
 COMMON_MARKER = '*'
 COMMON_SIZE = 80
-CYCLES_COLOR = 'black'
-PERF_COLOR = 'black'
-INSTR_COLOR = 'black'
 
 CHANGEPOINT_LINE_STYLE = '-'
 CHANGEPOINT_LINE_COLOR = 'r'
@@ -88,15 +85,8 @@ ZORDER_MEDIAN = 8
 ZORDER_CHANGEPOINTS = 10
 ZORDER_MARKERS = 20
 
-# Gap between right-hand y-axes.
-TWINX_OFFSET = 1.1
-
 # Padding for unified y-limits.
 Y_LIM_PADDING = 0.002
-
-# Use a fixed y-range for the aperf/mperf data.
-PERF_YRANGE = (0.0, 1.2)
-PERF_YTICK_FORMAT = '%.1f'
 
 # Inset placement (left, bottom, width, height) relative to subplot axis.
 INSET_DEFAULT_WIDTH = 0.4
@@ -117,7 +107,6 @@ TICK_FONTSIZE = 8
 TITLE_FONT_SIZE = 10
 AXIS_FONTSIZE = 8
 LEGEND_FONTSIZE = 10
-YTICK_FORMAT = '%.4f'
 
 MAX_SUBPLOTS_PER_ROW = 2
 EXPORT_SIZE_INCHES = [12, 10]
@@ -576,7 +565,7 @@ class ProcessExecChart(object):
                       color=CYCLES_COLOR, label=('Core %d cycles' % self.core_cycles[core]),
                       linewidth=PLOT_LINE_WIDTH, zorder=ZORDER_DATA)
             self.style_axis(self.cycles_axes[core], (self.cycles_min, self.cycles_max),
-                            None, 'CC #%d' % self.core_cycles[core], color=CYCLES_COLOR)
+                            None, 'CC #%d' % self.core_cycles[core], color=LINE_COLOUR)
             if core == 0:
                 # Add all items to page legend (only once).
                 handles, labels = self.cycles_axes[core].get_legend_handles_labels()
@@ -600,7 +589,7 @@ class ProcessExecChart(object):
                       linewidth=PLOT_LINE_WIDTH, zorder=ZORDER_DATA)
             self.instr_axes[index].set_ylim(self.instr_y_ranges[index])
             self.style_axis(self.instr_axes[index], self.instr_y_ranges[index],
-                            None, self.instr_data[index].title, color=INSTR_COLOR)
+                            None, self.instr_data[index].title, color=LINE_COLOUR)
             if index == 0:
                 # Add all items to page legend (only once).
                 handles, labels = self.instr_axes[index].get_legend_handles_labels()
