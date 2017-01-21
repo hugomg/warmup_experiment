@@ -17,9 +17,10 @@ from matplotlib.collections import LineCollection
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from warmup.krun_results import pretty_print_machine, read_krun_results_file
 from warmup.outliers import get_window
-from warmup.plotting import add_inset_to_axis, add_margin_to_axes, axis_to_figure_transform
-from warmup.plotting import collide_rect, compute_grid_offsets, format_yticks_scientific
-from warmup.plotting import get_unified_yrange, PDF_INFO_DICT, style_axis, STYLE_DICT
+from warmup.plotting import add_inset_to_axis, add_margin_to_axes, collide_rect
+from warmup.plotting import compute_grid_offsets, format_yticks_scientific
+from warmup.plotting import get_unified_yrange, PDF_INFO_DICT, shrink_inset_to_bbox
+from warmup.plotting import style_axis, STYLE_DICT
 from warmup.plotting import zoom_y_min, zoom_y_max
 from warmup.vm_instruments import INSTRUMENTATION_PARSERS
 
@@ -314,18 +315,9 @@ class ProcessExecChart(object):
         self.iterations = numpy.array(xrange(x_bounds[0], x_bounds[1]))
         self.y_range = y_range
         self.y_range_zoom = y_range_zoom
-        if outliers:
-            self.outliers = self._get_scatter_points_within_bounds(outliers, self.x_bounds)
-        else:
-            self.outliers = None
-        if unique:
-            self.unique = self._get_scatter_points_within_bounds(unique, self.x_bounds)
-        else:
-            self.unique = None
-        if common:
-            self.common = self._get_scatter_points_within_bounds(common, self.x_bounds)
-        else:
-            self.common = None
+        self.outliers = self._get_scatter_points_within_bounds(outliers, self.x_bounds)
+        self.unique = self._get_scatter_points_within_bounds(unique, self.x_bounds)
+        self.common = self._get_scatter_points_within_bounds(common, self.x_bounds)
         # Marshal changepoint data.
         self.changepoints = changepoints
         self.changepoint_means = changepoint_means
@@ -425,15 +417,29 @@ class ProcessExecChart(object):
         self.inset = None
 
     def plot_stack(self):
+        """Plot a stack of charts for this process execution.
+        Methods to plot the "little" charts above the main wallclock data must
+        increment self.row in order to be placed correctly in the grid spec.
+        """
         self.plot_wallclock_times()
         self.row = 0  # Number of smaller plots. Some methods add several charts.
         if self.cycles_data:
             self.plot_cycles_data()
+            self.cycles_axes[0].set_title(self.title, fontsize=TITLE_FONT_SIZE)
         if self.instr_data:
             self.plot_instr_data()
         if self.y_range_zoom[0] != None:
             self.plot_zoomed_data()
         add_margin_to_axes(self.wallclock_axis, x=0.02, y=0.02)
+        if not self.cycles_data and not self.instr_data and self.y_range_zoom == (None, None):
+            title_axis = self.wallclock_axis
+        elif not self.cycles_data and not self.instr_data:
+            title_axis = self.zoomed_axis
+        elif not self.cycles_data:
+            title_axis = self.instr_axes[0]
+        else:
+            title_axis = self.cycles_axes[0]
+        title_axis.set_title(self.title, fontsize=TITLE_FONT_SIZE)
 
     def style_axis(self, axis, y_range, x_label, y_label, color=LINE_COLOUR, smaller_plot=True):
         axis.set_ylim(y_range)
@@ -463,6 +469,8 @@ class ProcessExecChart(object):
         of outliers to plot, but we only want to view a small section of the
         whole chart.
         """
+        if scatter is None:
+            return None
         x_vals = [val for val in scatter if val >= x_bounds[0] and val < x_bounds[1]]
         y_vals = [val - x_bounds[0] for val in scatter if val >= x_bounds[0] and val < x_bounds[1]]
         return x_vals, y_vals
@@ -477,28 +485,25 @@ class ProcessExecChart(object):
         self.wallclock_axis.autoscale(enable=False, axis='both')
         self._plot_changepoints(self.wallclock_axis, large_markers=True)
         self._plot_outliers(self.wallclock_axis, large_markers=True)
-        if self.median:  # Plot the median.
-            self.plot_median(self.wallclock_axis)
-        if self.tukey:  # Fill between the Tukey band.
-            self.plot_tukey_interval(self.wallclock_axis)
+        self.plot_median(self.wallclock_axis)
+        self.plot_tukey_interval(self.wallclock_axis)
         self.style_axis(self.wallclock_axis, self.y_range, 'In-process iteration',
                         'Time (secs)', smaller_plot=False)
         # Add all items to page legend.
         handles, labels = self.wallclock_axis.get_legend_handles_labels()
         self.handles_labels[0] += handles
         self.handles_labels[1] += labels
-        # Plot title goes above the top subplot (only once).
-        if not self.cycles_data and not self.instr_data and self.y_range_zoom[0] == None:
-            self.wallclock_axis.set_title(self.title, fontsize=TITLE_FONT_SIZE)
 
     def plot_median(self, axis):
-        axis.plot(self.iterations, self.medians, label='Median', zorder=ZORDER_MEDIAN,
-                  linewidth=LINE_WIDTH, color=MEDIAN_COLOUR)
+        if self.median:
+            axis.plot(self.iterations, self.medians, label='Median', zorder=ZORDER_MEDIAN,
+                      linewidth=LINE_WIDTH, color=MEDIAN_COLOUR)
 
     def plot_tukey_interval(self, axis):
-        axis.fill_between(self.iterations, self.tukey_interval[0], self.tukey_interval[1],
-                          alpha=FILL_ALPHA, facecolor=LINE_COLOUR, edgecolor=LINE_COLOUR,
-                          zorder=ZORDER_FILL_REGION)
+        if self.tukey:
+            axis.fill_between(self.iterations, self.tukey_interval[0], self.tukey_interval[1],
+                              alpha=FILL_ALPHA, facecolor=LINE_COLOUR, edgecolor=LINE_COLOUR,
+                              zorder=ZORDER_FILL_REGION)
 
     def _plot_outliers(self, axis, large_markers=True):
         if large_markers:
@@ -563,13 +568,6 @@ class ProcessExecChart(object):
                       linewidth=LINE_WIDTH, zorder=ZORDER_DATA)
             self.style_axis(self.cycles_axes[core], (self.cycles_min, self.cycles_max),
                             None, 'CC #%d' % self.core_cycles[core], color=LINE_COLOUR)
-            if core == 0:
-                # Add all items to page legend (only once).
-                handles, labels = self.cycles_axes[core].get_legend_handles_labels()
-                self.handles_labels[0] += handles
-                self.handles_labels[1].append('Normalised core cycles')
-                # Plot title goes above the top subplot (only once).
-                self.cycles_axes[core].set_title(self.title, fontsize=TITLE_FONT_SIZE)
             self.row += 1
 
     def plot_instr_data(self):
@@ -587,14 +585,6 @@ class ProcessExecChart(object):
             self.instr_axes[index].set_ylim(self.instr_y_ranges[index])
             self.style_axis(self.instr_axes[index], self.instr_y_ranges[index],
                             None, self.instr_data[index].title, color=LINE_COLOUR)
-            if index == 0:
-                # Add all items to page legend (only once).
-                handles, labels = self.instr_axes[index].get_legend_handles_labels()
-                self.handles_labels[0] += handles
-                self.handles_labels[1].append(', '.join(legend_texts))
-                # Plot title goes above the top subplot (only once).
-                if not self.cycles_data:
-                    self.instr_axes[index].set_title(self.title, fontsize=TITLE_FONT_SIZE)
             self.row += 1
 
     def plot_zoomed_data(self):
@@ -608,9 +598,6 @@ class ProcessExecChart(object):
         add_margin_to_axes(self.zoomed_axis, x=0.0, y=ZOOM_EXTRA_Y_LIM_PADDING)
         self._plot_changepoints(self.zoomed_axis, large_markers=False)
         self._plot_outliers(self.zoomed_axis, large_markers=False)
-        # Plot title goes above the top subplot (only once).
-        if not self.cycles_data and not self.instr_data:
-            self.zoomed_axis.set_title(self.title, fontsize=TITLE_FONT_SIZE)
         self.row += 1
 
     def plot_inset(self, axis, fig):
@@ -678,23 +665,7 @@ class ProcessExecChart(object):
                     else:
                         new_xticklabels.append(str(int(float(label)) + self.x_bounds[0]))
                 inset.set_xticklabels(new_xticklabels)
-            # Code below by Ben Schmidt http://stackoverflow.com/questions/41462693/
-            inset_tight_bbox = inset.get_tightbbox(fig_renderer)
-            inv_transform = axis.transAxes.inverted()
-            xmin, ymin = inv_transform.transform(inset.bbox.min)
-            xmin_tight, ymin_tight = inv_transform.transform(inset_tight_bbox.min)
-            xmax, ymax = inv_transform.transform(inset.bbox.max)
-            xmax_tight, ymax_tight = inv_transform.transform(inset_tight_bbox.max)
-            # Shift actual axis bounds inwards by 'margin' so that new
-            # size + margin is original axis bounds.
-            xmin_new = xmin + (xmin - xmin_tight)
-            ymin_new = ymin + (ymin - ymin_tight)
-            xmax_new = xmax - (xmax_tight - xmax)
-            ymax_new = ymax - (ymax_tight - ymax)
-            [x_fig, y_fig] = axis_to_figure_transform(fig, axis, [xmin_new, ymin_new])
-            [x2_fig, y2_fig] = axis_to_figure_transform(fig, axis, [xmax_new, ymax_new])
-            inset.set_position([x_fig, y_fig, x2_fig - x_fig, y2_fig - y_fig])
-
+            shrink_inset_to_bbox(fig_renderer, fig, axis, inset)
 
 def draw_page(is_interactive, executions, cycles_executions,
               instr_executions, titles, window_size, xlimits,

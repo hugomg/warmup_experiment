@@ -95,6 +95,25 @@ def axis_to_figure_transform(fig, axis, coord):
     return fig.transFigure.inverted().transform(axis.transAxes.transform(coord))
 
 
+def shrink_inset_to_bbox(fig_renderer, fig, axis, inset):
+    """Code below by Ben Schmidt http://stackoverflow.com/questions/41462693/"""
+    inset_tight_bbox = inset.get_tightbbox(fig_renderer)
+    inv_transform = axis.transAxes.inverted()
+    xmin, ymin = inv_transform.transform(inset.bbox.min)
+    xmin_tight, ymin_tight = inv_transform.transform(inset_tight_bbox.min)
+    xmax, ymax = inv_transform.transform(inset.bbox.max)
+    xmax_tight, ymax_tight = inv_transform.transform(inset_tight_bbox.max)
+    # Shift actual axis bounds inwards by 'margin' so that new
+    # size + margin is original axis bounds.
+    xmin_new = xmin + (xmin - xmin_tight)
+    ymin_new = ymin + (ymin - ymin_tight)
+    xmax_new = xmax - (xmax_tight - xmax)
+    ymax_new = ymax - (ymax_tight - ymax)
+    [x_fig, y_fig] = axis_to_figure_transform(fig, axis, [xmin_new, ymin_new])
+    [x2_fig, y2_fig] = axis_to_figure_transform(fig, axis, [xmax_new, ymax_new])
+    inset.set_position([x_fig, y_fig, x2_fig - x_fig, y2_fig - y_fig])
+
+
 def collide_rect((left, bottom, width, height), fig, axis, data, x_bounds):
     """Determine whether a rectangle (in axis coordinates) collides with
     any data (data coordinates, or seconds). We use the matplotlib transData
