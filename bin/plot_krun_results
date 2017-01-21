@@ -141,8 +141,8 @@ class BenchmarkPlotDocument(object):
     of process execution plots.
     """
 
-    def __init__(self, is_interactive, data_dcts, plot_titles, window_size, outfile,
-                 xlimits, with_outliers, unique_outliers, changepoints,
+    def __init__(self, is_interactive, data_dictionary, plot_titles, window_size,
+                 outfile, xlimits, with_outliers, unique_outliers, changepoints,
                  changepoint_means, median=False, tukey=False, inset=False, zoom=True,
                  one_page=False, legend_off=True, core_cycles=(0,1,2,3), cycles_ylimits=None):
         self.is_interactive = is_interactive
@@ -150,10 +150,7 @@ class BenchmarkPlotDocument(object):
         self.window_size = window_size
         self.pdf_filename = outfile
         self.xlimits = xlimits
-        self.with_outliers = with_outliers
-        self.unique_outliers = unique_outliers
-        self.changepoints = changepoints
-        self.changepoint_means = changepoint_means
+        self.data_dictionary = data_dictionary
         self.median = median
         self.tukey = tukey
         self.inset = inset
@@ -162,117 +159,81 @@ class BenchmarkPlotDocument(object):
         self.legend_off = legend_off
         self.core_cycles = core_cycles
         self.cycles_ylimits = cycles_ylimits
-
-        # Run sequences, outliers and subplot titles for each page we need to plot.
-        self.pages, self.all_subplot_titles = list(), list()
-        self.cycles_pages = list()
-        self.instr_pages = list()
-        self.all_outliers, self.all_common, self.all_unique = list(), list(), list()
-        self.all_changepoints, self.all_changepoint_means = list(), list()
-        self.all_classifications = list()
-
-        # By default, each benchmark from each machine is placed on a separate
-        # page. If the --one-page switch has been passed in, then we place
-        # all plots on a single page. In which case, we need to construct
-        # a flat list of all run sequences.
-        if one_page:
-            page, subplot_titles = list(), list()
-            cycles_page = list()
-            instr_page = list()
+        self.pages = list()  # List of DocumentPage objects.
+        if one_page:  # Marshal data into pages.
+            subplot_titles = list()
+            wallclock_page, cycles_page, instrumentation_page = list(), list(), list()
             page_common, page_unique, page_outlier = list(), list(), list()
             page_changepoints, page_changepoint_means = list(), list()
             page_classifications = list()
-            for key in sorted(data_dcts['data']):
-                for machine in sorted(data_dcts['data'][key]):
-                    for index, run_seq in enumerate(data_dcts['data'][key][machine]):
-                        page.append(run_seq)
-                        if data_dcts['cycles_counts'][key][machine]:
-                            cycles_page.append(data_dcts['cycles_counts'][key][machine][index])
-                        if data_dcts['instr_data'][key][machine]:
-                            instr_page.append(data_dcts['instr_data'][key][machine][index])
+            for key in sorted(data_dictionary['data']):
+                for machine in sorted(data_dictionary['data'][key]):
+                    for index, run_seq in enumerate(data_dictionary['data'][key][machine]):
+                        wallclock_page.append(run_seq)
+                        if data_dictionary['cycles_counts'][key][machine]:
+                            cycles_page.append(data_dictionary['cycles_counts'][key][machine][index])
+                        if data_dictionary['instr_data'][key][machine]:
+                            instrumentation_page.append(data_dictionary['instr_data'][key][machine][index])
                         subplot_titles.append(plot_titles[key][machine][index])
-                        # Collect outliers, if the user wishes to annotate them on
-                        # the plots. The draw_page() and draw_subplot() functions
-                        # expect either lists of outliers or None (if outliers are
-                        # not to be annotated).
-                        if with_outliers:
-                            page_outlier.append(data_dcts['all_outliers'][key][machine][index])
-                        else:
-                            page_outlier.append(None)
-                        if unique_outliers:
-                            page_common.append(data_dcts['common_outliers'][key][machine][index])
-                            page_unique.append(data_dcts['unique_outliers'][key][machine][index])
-                        else:
-                            page_common.append(None)
-                            page_unique.append(None)
-                        if changepoints:
-                            page_changepoints.append(data_dcts['changepoints'][key][machine][index])
-                            page_changepoint_means.append(None)
-                            page_classifications.append(data_dcts['classifications'][key][machine][index])
-                        if changepoint_means:
-                            page_changepoints.append(data_dcts['changepoints'][key][machine][index])
-                            page_changepoint_means.append(data_dcts['changepoint_means'][key][machine][index])
-                            page_classifications.append(data_dcts['classifications'][key][machine][index])
-                        else:
-                            page_changepoints.append(None)
-                            page_changepoint_means.append(None)
-                            page_classifications.append(None)
+                        page_outlier.append(self._get_index_or_none(with_outliers,
+                                            'all_outliers', key, machine, index))
+                        page_unique.append(self._get_index_or_none(unique_outliers,
+                                           'unique_outliers', key, machine, index))
+                        page_common.append(self._get_index_or_none(unique_outliers,
+                                           'common_outliers', key, machine, index))
+                        page_changepoints.append(self._get_index_or_none(changepoints or changepoint_means,
+                                                 'changepoints', key, machine, index))
+                        page_changepoint_means.append(self._get_index_or_none(changepoint_means,
+                                                      'changepoint_means', key, machine, index))
+                        page_classifications.append(self._get_index_or_none(changepoints or changepoint_means,
+                                                    'classifications', key, machine, index))
+            page = self._create_page(wallclock_page, cycles_page, instrumentation_page,
+                       subplot_titles, page_outlier, page_unique, page_common,
+                       page_changepoints, page_changepoint_means, page_classifications)
             self.pages.append(page)
-            self.cycles_pages.append(cycles_page)
-            self.instr_pages.append(instr_page)
-            self.all_subplot_titles.append(subplot_titles)
-            self.all_outliers.append(page_outlier)
-            self.all_common.append(page_common)
-            self.all_unique.append(page_unique)
-            self.all_changepoints.append(page_changepoints)
-            self.all_changepoint_means.append(page_changepoint_means)
-            self.all_classifications.append(page_classifications)
-        else:  # Create multiple pages.
-            for key in sorted(data_dcts['data']):
-                for machine in sorted(data_dcts['data'][key]):
-                    self.pages.append(data_dcts['data'][key][machine])
-                    self.cycles_pages.append(data_dcts['cycles_counts'][key][machine])
-                    self.instr_pages.append(data_dcts['instr_data'][key][machine])
-                    self.all_subplot_titles.append(plot_titles[key][machine])
-                    if with_outliers:
-                        self.all_outliers.append(data_dcts['all_outliers'][key][machine])
-                    else:
-                        self.all_outliers.append(None)
-                    if unique_outliers:
-                        self.all_common.append(data_dcts['common_outliers'][key][machine])
-                        self.all_unique.append(data_dcts['unique_outliers'][key][machine])
-                    else:
-                        self.all_common.append(None)
-                        self.all_unique.append(None)
-                    if changepoints:
-                        self.all_changepoints.append(data_dcts['changepoints'][key][machine])
-                        self.all_changepoint_means.append(None)
-                        self.all_classifications.append(data_dcts['classifications'][key][machine])
-                    elif changepoint_means:
-                        self.all_changepoints.append(data_dcts['changepoints'][key][machine])
-                        self.all_changepoint_means.append(data_dcts['changepoint_means'][key][machine])
-                        self.all_classifications.append(data_dcts['classifications'][key][machine])
-                    else:
-                        self.all_changepoints.append(None)
-                        self.all_changepoint_means.append(None)
-                        self.all_classifications.append(None)
+        else:  # Create one page per Benchmark / VM / variant triplet.
+            for key in sorted(data_dictionary['data']):
+                for machine in sorted(data_dictionary['data'][key]):
+                    page = self._create_page(self._get_key_or_none(True, 'data', key, machine),
+                        self._get_key_or_none(True, 'cycles_counts', key, machine),
+                        self._get_key_or_none(True, 'instr_data', key, machine),
+                        plot_titles[key][machine],
+                        self._get_key_or_none(with_outliers, 'all_outliers', key, machine),
+                        self._get_key_or_none(unique_outliers, 'unique_outliers', key, machine),
+                        self._get_key_or_none(unique_outliers, 'common_outliers', key, machine),
+                        self._get_key_or_none(changepoints or changepoint_means, 'changepoints', key, machine),
+                        self._get_key_or_none(changepoint_means, 'changepoint_means', key, machine),
+                        self._get_key_or_none(changepoints or changepoint_means, 'classifications', key, machine))
+                    self.pages.append(page)
 
-    def _only_uncrashed(self, data, page, machine, benchmark, vm):
-        """Strip out subplots whose benchmark crashed."""
-        if data is None:
-            return None
-        uncrashed = list()
-        for index in xrange(len(page)):
-            if page[index]:
-                try:
-                    uncrashed.append(data[index])
-                except IndexError:  # Absent data.
-                    uncrashed.append([])
-            else:
-                if data == page:  # Stops repeated printing of warning.
-                    print('WARNING: requested process execution crashed: '
-                          '%s, %s, %s, %s' % (machine, benchmark, vm, index + 1))
-        return uncrashed
+    def _get_key_or_none(self, is_key_requested, json_key, triplet_key, machine,):
+        """Return json_key data for a particular machine/key pair, if the user
+        has requested it.
+        """
+        if is_key_requested:
+            return self.data_dictionary[json_key][triplet_key][machine]
+        return None
+
+    def _get_index_or_none(self, is_key_requested, json_key, triplet_key, machine, index):
+        """Return json_key data for a particular machine/key pair, if the user
+        has requested it.
+        """
+        if is_key_requested:
+            return self.data_dictionary[json_key][triplet_key][machine][index]
+        return None
+
+    def _create_page(self, wallclock_data, core_cycle_data, instrumentation_data,
+                     plot_titles, outliers_all, outliers_unique, outliers_common,
+                     changepoints, changepoint_means, classifications):
+        """Create a single document page.
+        This method factors out arguments common to all pages.
+        """
+        return DocumentPage(self.is_interactive, wallclock_data, core_cycle_data,
+                            instrumentation_data, plot_titles, self.window_size,
+                            self.xlimits, outliers_all, outliers_unique,
+                            outliers_common, changepoints, changepoint_means,
+                            classifications, self.median, self.tukey, self.inset,
+                            self.zoom, self.legend_off, self.core_cycles, self.cycles_ylimits)
 
     def plot_document(self):
         """Draw each page and display (interactive mode) or save to disk."""
@@ -283,34 +244,18 @@ class BenchmarkPlotDocument(object):
             info_dict.update(PDF_INFO_DICT)
         try:
             for index, page in enumerate(self.pages):
-                bmark, vm, mc = self.all_subplot_titles[index][0].split(', ')[:3]
-                print 'Plotting %s: %s (%s) on page %02d of %02d.' % \
-                      (mc, bmark, vm, index + 1, len(self.pages))
-                # Strip out any process executions that have crashed..
-                wct_page = self._only_uncrashed(page, page, mc, bmark, vm)
-                cycles_page = self._only_uncrashed(self.cycles_pages[index], page, mc, bmark, vm)
-                instr_page = self._only_uncrashed(self.instr_pages[index], page, mc, bmark, vm)
-                subplot_titles = self._only_uncrashed(self.all_subplot_titles[index], page, mc, bmark, vm)
-                outliers = self._only_uncrashed(self.all_outliers[index], page, mc, bmark, vm)
-                common = self._only_uncrashed(self.all_common[index], page, mc, bmark, vm)
-                unique = self._only_uncrashed(self.all_unique[index], page, mc, bmark, vm)
-                changepoints = self._only_uncrashed(self.all_changepoints[index], page, mc, bmark, vm)
-                changepoint_means = self._only_uncrashed(self.all_changepoint_means[index], page, mc, bmark, vm)
-                classifications = self._only_uncrashed(self.all_classifications[index], page, mc, bmark, vm)
-                # Draw this page.
-                fig = DocumentPage(self.is_interactive, wct_page, cycles_page,
-                                    instr_page, subplot_titles, self.window_size,
-                                    self.xlimits, outliers, unique, common, changepoints,
-                                    changepoint_means, classifications, self.median,
-                                    self.tukey, self.inset, self.zoom, self.legend_off,
-                                    self.core_cycles, self.cycles_ylimits).draw_page()
-                if fig is not None:
-                    if not self.is_interactive:
-                        pdf.savefig(fig, dpi=fig.dpi, orientation='landscape',
-                                    bbox_inches='tight')
-                        pyplot.close()
+                if self.one_page:
+                    print('Printing single-page document.')
+                else:
+                    bmark, vm, mc = self.pages[index].titles[0].split(', ')[:3]
+                    print('Plotting %s: %s (%s) on page %02d of %02d.' %
+                          (mc, bmark, vm, index + 1, len(self.pages)))
+                fig = self.pages[index].draw_page()
+                if fig and not self.is_interactive:
+                    pdf.savefig(fig, dpi=fig.dpi, orientation='landscape', bbox_inches='tight')
+                    pyplot.close()
         except KeyboardInterrupt:
-            pass  # Avoid printing a traceback and just save the file.
+            pass  # User has requested exit, so avoid printing a traceback.
         finally:
             if not self.is_interactive:
                 pdf.close()
@@ -318,25 +263,26 @@ class BenchmarkPlotDocument(object):
 
 
 class DocumentPage(object):
+    """A single page of the final document."""
 
-    def __init__(self, is_interactive, executions, cycles_executions,
-                  instr_executions, titles, window_size, xlimits,
-                  outliers, unique, common, changepoints, changepoint_means, classifications,
-                  median, tukey, inset=False, zoom=True, legend_off=True,
-                  core_cycles=(0,1,2,3), cycles_ylimits=None):
+    def __init__(self, is_interactive, wallclock_data, cycles_data, instrumentation_data,
+                 titles, window_size, xlimits, outliers, unique, common, changepoints,
+                 changepoint_means, classifications, median, tukey, inset=False,
+                 zoom=True, legend_off=True, core_cycles=(0,1,2,3), cycles_ylimits=None):
         self.is_interactive = is_interactive
-        self.executions = executions  # TODO RENAME
-        self.cycles_executions = cycles_executions
-        self.instr_executions = instr_executions
-        self.titles = titles
+        self.wallclock_data = wallclock_data
+        crashed = self._get_crashed_indices()
+        self.cycles_data = self._delete_crashed_if_not_none(crashed, cycles_data)
+        self.instrumentation_data = self._delete_crashed_if_not_none(crashed, instrumentation_data)
+        self.titles = self._delete_crashed_if_not_none(crashed, titles)
         self.window_size = window_size
         self.xlimits = xlimits
-        self.outliers = outliers
-        self.unique = unique
-        self.common = common
-        self.changepoints = changepoints
-        self.changepoint_means = changepoint_means
-        self.classifications = classifications
+        self.outliers = self._delete_crashed_if_not_none(crashed, outliers)
+        self.unique = self._delete_crashed_if_not_none(crashed, unique)
+        self.common = self._delete_crashed_if_not_none(crashed, common)
+        self.changepoints = self._delete_crashed_if_not_none(crashed, changepoints)
+        self.changepoint_means = self._delete_crashed_if_not_none(crashed, changepoint_means)
+        self.classifications = self._delete_crashed_if_not_none(crashed, classifications)
         self.median = median
         self.tukey = tukey
         self.inset = inset
@@ -345,65 +291,94 @@ class DocumentPage(object):
         self.core_cycles = core_cycles
         self.cycles_ylimits = cycles_ylimits
 
-    def draw_page(self):
-        """Plot a page of benchmarks.
+    def _get_crashed_indices(self):
+        """Return indices of benchmarks who did not complete all their iterations."""
+        lengths = [len(data) for data in self.wallclock_data]
+        longest = sorted(set(lengths))[-1]
+        crashed = list()
+        for index, length in enumerate(lengths):
+            if length < longest:
+                crashed.append(index)
+                print('WARNING: requested plot crashed: %s' % self.titles[index])
+        return crashed
+
+    def _delete_crashed_if_not_none(self, crashed_indices, data):
+        """Delete data from crashed benchmarks.
         """
-        n_execs = len(self.executions)
+        if crashed_indices and (data is not None and len(data) > 0):
+            for index in sorted(crashed_indices, reversed=True):
+                del data[index]
+        return data
+
+    def _get_index_or_none(self, sequence, index):
+        """Either return data for the index'th process execution, or None.
+        A sequence will be None if the user has not requested it be rendered.
+        """
+        if sequence is None or sequence == [] or sequence[index] is None:
+            return None
+        return sequence[index]
+
+    def draw_page(self):
+        """Plot a page of benchmarks."""
+        n_execs = len(self.wallclock_data)
         if n_execs == 0:
             print('WARNING: empty page')
             return None
 
-        n_rows = int(math.ceil(float(len(self.executions)) / MAX_SUBPLOTS_PER_ROW))
+        n_rows = int(math.ceil(float(len(self.wallclock_data)) / MAX_SUBPLOTS_PER_ROW))
         n_cols = min(MAX_SUBPLOTS_PER_ROW, n_execs)
 
         print('%g plots arranged in %g rows and %g columns.'
-              % (len(self.executions), n_rows, n_cols))
+              % (len(self.wallclock_data), n_rows, n_cols))
 
         if self.xlimits is None:
             xlimits_start = 0
-            xlimits_stop = len(self.executions[0])  # Assume all execs are the same length
+            xlimits_stop = len(self.wallclock_data[0])  # Assume all execs are the same length
         else:
             try:
                 xlimits_start, xlimits_stop = [int(x) for x in self.xlimits.split(',')]
-                if xlimits_start < 0 or xlimits_stop > len(self.executions[0]):
+                if xlimits_start < 0 or xlimits_stop > len(self.wallclock_data[0]):
                     fatal_error('You specified %s as xlimits, but your data contains'
                                 ' iterations between 0 and %d' %
-                                (self.xlimits, len(self.executions[0])))
+                                (self.xlimits, len(self.wallclock_data[0])))
             except ValueError:
                 fatal_error('Invalid xlimits pair: %s' % self.xlimits)
 
         # Find the min and max y values across all wallclock time plots for this page.
-        y_min, y_max = get_unified_yrange(self.executions, xlimits_start, xlimits_stop, padding=Y_LIM_PADDING)
+        y_min, y_max = get_unified_yrange(self.wallclock_data, xlimits_start,
+                                          xlimits_stop, padding=Y_LIM_PADDING)
 
         # Find y-limits for a zoomed-in plot for each execution on this page.
         y_range_zoom = list()
         if not self.zoom:  # User requested no zoom plot.
-            y_range_zoom = [(None, None)] * len(self.executions)
+            y_range_zoom = [(None, None)] * len(self.wallclock_data)
         else:
-            for index in xrange(len(self.executions)):
+            for index in xrange(len(self.wallclock_data)):
                 if self.window_size > 0:
                     first_n = self.window_size
                 else:
-                    first_n = int(len(self.executions[index]) * ZOOM_PROPORTION)
+                    first_n = int(len(self.wallclock_data[index]) * ZOOM_PROPORTION)
                 if self.outliers:
-                    y_zoom_min = zoom_y_min(self.executions[index], self.outliers[index], start_from=first_n)
-                    y_zoom_max = zoom_y_max(self.executions[index], self.outliers[index], start_from=first_n)
+                    y_zoom_min = zoom_y_min(self.wallclock_data[index], self.outliers[index],
+                                            start_from=first_n)
+                    y_zoom_max = zoom_y_max(self.wallclock_data[index], self.outliers[index],
+                                            start_from=first_n)
                 else:
-                    y_zoom_min = min(self.executions[index][first_n:])
-                    y_zoom_max = max(self.executions[index][first_n:])
+                    y_zoom_min = min(self.wallclock_data[index][first_n:])
+                    y_zoom_max = max(self.wallclock_data[index][first_n:])
                 y_range_zoom.append((y_zoom_min, y_zoom_max))
 
         # Get unified y-ranges for the instrumentation data. Each VM may have more
         # more than one set of instrumentation data (e.g. GC events, JIT
         # compilation, etc.) and each VM instrument must have its own y-range.
-        if self.instr_executions:
+        if self.instrumentation_data:
             instr_data_by_instrument = []
-            for execution in self.instr_executions:
+            for execution in self.instrumentation_data:
                 if execution is None:
                     continue  # absent instr data for this pexec
                 instr_data_by_instrument = [list() for _ in execution]
                 break
-            for execution in self.instr_executions:
+            for execution in self.instrumentation_data:
                 if execution is None:
                     for index in xrange(len(instr_data_by_instrument)):
                         instr_data_by_instrument[index].append(None)
@@ -427,37 +402,22 @@ class DocumentPage(object):
         outer_grid = gridspec.GridSpec(n_rows, n_cols)
         p_exec_charts = list()  # ProcessExecChart objects for this page.
         index, row, col = 0, 0, 0
-        cycles_data, instr_data = None, None
-        outliers_exec, unique_exec, common_exec = None, None, None
-        changepoint_exec, changepoint_mean_exec = None, None
-        classification_exec = None
         while index < n_execs:
-            data = self.executions[index]
-            if self.cycles_executions:
-                cycles_data = self.cycles_executions[index]
-            if self.instr_executions:
-                instr_data = self.instr_executions[index]
-            if self.outliers:
-                outliers_exec = self.outliers[index]
-            if self.unique:
-                unique_exec = self.unique[index]
-            if self.common:
-                common_exec = self.common[index]
-            if self.changepoints:
-                changepoint_exec = self.changepoints[index]
-                self.classification_exec = self.classifications[index]
-            if self.changepoint_means:
-                changepoint_mean_exec = self.changepoint_means[index]
-                classification_exec = self.classifications[index]
-            # Get axis and draw plot.
             inner_grid = outer_grid[row, col]
             x_bounds = [xlimits_start, xlimits_stop]
-            p_exec_charts.append(ProcessExecChart(inner_grid, data, cycles_data,
-                     instr_data, instr_y_ranges, self.titles[index], x_bounds,
-                     [y_min, y_max], y_range_zoom[index], self.window_size,
-                     outliers_exec, unique_exec, common_exec, changepoint_exec,
-                     changepoint_mean_exec, classification_exec, self.median,
-                     self.tukey, self.core_cycles, self.cycles_ylimits))
+            p_exec = ProcessExecChart(inner_grid, self.wallclock_data[index],
+                        self._get_index_or_none(self.cycles_data, index),
+                        self._get_index_or_none(self.instrumentation_data, index),
+                        instr_y_ranges, self.titles[index], x_bounds, [y_min, y_max],
+                        y_range_zoom[index], self.window_size,
+                        self._get_index_or_none(self.outliers, index),
+                        self._get_index_or_none(self.unique, index),
+                        self._get_index_or_none(self.common, index),
+                        self._get_index_or_none(self.changepoints, index),
+                        self._get_index_or_none(self.changepoint_means, index),
+                        self._get_index_or_none(self.classifications, index),
+                        self.median, self.tukey, self.core_cycles, self.cycles_ylimits)
+            p_exec_charts.append(p_exec)
             p_exec_charts[index].plot_stack()
             col += 1
             if col == MAX_SUBPLOTS_PER_ROW:
