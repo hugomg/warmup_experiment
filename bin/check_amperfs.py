@@ -1,11 +1,13 @@
 #!/usr/bin/env python2.7
 """
-usage: check_amperfs.py <results_file> <ratio-bounds>
-            <tickful-idle-threshold> <tickless-idle-threshold>
-            <idle-threshold-factor>
+usage: check_amperfs.py <results_file> <aperf/mperf-ratio-bounds>
+            <tickful-busy-threshold> <tickless-busy-threshold>
+            <busy-threshold-factor>
 
 Checks if the CPU has clocked down or entered turbo mode during Krun
-benchmarking.
+benchmarking. A core is considered idle when the aperf value is less than the
+estimated busy threshold divided by the busy threshold factor. Busy core
+aperf/mperf ratios are then checked to be within the specified bouunds.
 
 Arguments:
     * results_file:
@@ -13,18 +15,18 @@ Arguments:
 
     * ratio-bounds:
         Comma separated pair of allowed deviation from the target aperf/mperf
-        ratio. e.g. '0.9,1.2'.
+        ratio of 1. e.g. '0.9,1.2'.
 
-    * tickful-idle-threshold:
+    * tickful-busy-threshold:
         Estimated time-normalised (per-second) aperf reading for a idle tickful
         CPU core.
 
-    * tickless-idle-threshold:
+    * tickless-busy-threshold:
         Estimated time-normalised (per-second) aperf reading for a idle
         tickless CPU core.
 
-    * idle-threshold-factor
-        Value to multiply idle-thresholds by to make the idle/busy threshold.
+    * busy-threshold-factor
+        Value to divide busy-thresholds by to make the busy threshold.
 """
 
 
@@ -63,10 +65,11 @@ class AMResult(object):
         ]
 
 
-def check_amperfs(aperfs, mperfs, wcts, idle_threshold):
+def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds):
     assert len(aperfs) == len(mperfs) == len(wcts)
 
     res = AMResult()
+    #iter_idx = 0
     for aval, mval, wctval in zip(aperfs, mperfs, wcts):
         # normalise the counts to per-second readings
         norm_aval = float(aval) / wctval
@@ -74,24 +77,34 @@ def check_amperfs(aperfs, mperfs, wcts, idle_threshold):
         ratio = norm_aval / norm_mval
 
         # Record the extents of ratio for idle/busy times
-        if norm_mval < idle_threshold:
+        #print("norm_aval=%f, busy_threshold=%f" % (norm_aval, busy_threshold))
+        if norm_aval < busy_threshold:
             # Idle core
             if ratio < 1.0 and ratio < res.ratio_bounds_idle[0]:
                 res.ratio_bounds_idle[0] = ratio
-            elif ratio > 1.0 and ratio > res.ratio_bounds_idle[1]:
+            if ratio > 1.0 and ratio > res.ratio_bounds_idle[1]:
                 res.ratio_bounds_idle[1] = ratio
         else:
             # Busy core
             if ratio < 1.0 and ratio < res.ratio_bounds_busy[0]:
                 res.ratio_bounds_busy[0] = ratio
-            elif ratio > 1.0 and ratio > res.ratio_bounds_busy[1]:
+            if ratio > 1.0 and ratio > res.ratio_bounds_busy[1]:
                 res.ratio_bounds_busy[1] = ratio
+
+            #if ratio < ratio_bounds[0]:
+            #    print("WARNING! Thottling?")
+            #    import pdb; pdb.set_trace()
+            #elif ratio > ratio_bounds[1]:
+            #    print("WARNING! Turbo?")
+        #iter_idx += 1
+
+
     assert res.ratio_bounds_idle[0] <= res.ratio_bounds_idle[1]
     assert res.ratio_bounds_busy[0] <= res.ratio_bounds_busy[1]
     return res
 
 
-def main(data_dct, ratio_bounds, idle_threshold):
+def main(data_dct, ratio_bounds, busy_threshold):
     pexecs_checked = 0
     summary = AMResult()
 
@@ -113,13 +126,13 @@ def main(data_dct, ratio_bounds, idle_threshold):
                 core_mperfs = pexec_mperfs[core_idx]
                 if core_idx == 0:
                     # tickful core
-                    idle_threshold = idle_thresholds[0]
+                    busy_threshold = busy_thresholds[0]
                 else:
                     # tickless core
-                    idle_threshold = idle_thresholds[1]
+                    busy_threshold = busy_thresholds[1]
 
                 res = check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
-                                    idle_threshold)
+                                    busy_threshold, ratio_bounds)
 
                 # Now report errors
                 if res.ratio_bounds_busy[0] < ratio_bounds[0]:
@@ -138,8 +151,8 @@ def main(data_dct, ratio_bounds, idle_threshold):
             pexecs_checked +=1
     print("")
     print("num proc. execs. checked: %s" % pexecs_checked)
-    print("idle a/mperf count threshold: %s" % idle_threshold)
-    print("busy ratio thresholds: [%s, %s]" % (ratio_bounds[0], ratio_bounds[1]))
+    print("busy a/mperf count threshold: %s" % busy_threshold)
+    print("aperf/mperf ratio thresholds: [%s, %s]" % (ratio_bounds[0], ratio_bounds[1]))
     print("summary: %s " % summary)
 
 
@@ -151,12 +164,12 @@ if __name__ == "__main__":
     try:
         lo_ratio, hi_ratio = sys.argv[2].split(",")
         ratio_bounds = float(lo_ratio), float(hi_ratio)
-        idle_threshold_factor = float(sys.argv[5])
-        idle_thresholds = float(sys.argv[3]) * idle_threshold_factor, \
-            float(sys.argv[4]) * idle_threshold_factor # tickful, tickless
+        busy_threshold_factor = float(sys.argv[5])
+        busy_thresholds = float(sys.argv[3]) / busy_threshold_factor, \
+            float(sys.argv[4]) / busy_threshold_factor # tickful, tickless
     except:
         print(__doc__)
         sys.exit(1)
 
     data_dct = read_krun_results_file(sys.argv[1])
-    main(data_dct, ratio_bounds, idle_thresholds)
+    main(data_dct, ratio_bounds, busy_thresholds)
