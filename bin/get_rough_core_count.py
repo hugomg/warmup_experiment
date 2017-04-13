@@ -38,6 +38,8 @@ if __name__ == "__main__":
 
     idle_tickful_means = []
     idle_tickless_means = []
+    busy_tickful_means = []
+    busy_tickless_means = []
     for arg in sys.argv[2:]:
         bench, vm, variant, pexec_idxs = arg.split(":")
         key = "%s:%s:%s" % (bench, vm, variant)
@@ -64,6 +66,10 @@ if __name__ == "__main__":
                 if mean_aperf_norm > BUSY_APERF_THRESHOLD:
                     busy_core.append(core_idx)
                     print("  core: %d (BUSY)" % core_idx)
+                    if core_idx == 0:
+                        busy_tickful_means.append(mean_aperf_norm)
+                    else:
+                        busy_tickless_means.append(mean_aperf_norm)
                 else:
                     print("  core: %d (IDLE)" % core_idx)
                     if core_idx == 0:
@@ -79,3 +85,5 @@ if __name__ == "__main__":
 
     print("mean norm tickful idle aperf : %f" % mean(idle_tickful_means))
     print("mean nomm tickless idle aperf: %f" % mean(idle_tickless_means))
+    print("mean norm tickful busy aperf : %f" % mean(busy_tickful_means))
+    print("mean nomm tickless busy aperf: %f" % mean(busy_tickless_means))
