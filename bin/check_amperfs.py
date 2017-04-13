@@ -2,7 +2,7 @@
 """
 usage: check_amperfs.py <results_file> <aperf/mperf-ratio-bounds>
             <tickful-busy-threshold> <tickless-busy-threshold>
-            <busy-threshold-factor>
+            <busy-threshold-factor> <migration-lookback>
 
 Checks if the CPU has clocked down or entered turbo mode during Krun
 benchmarking. A core is considered idle when the aperf value is less than the
@@ -27,6 +27,9 @@ Arguments:
 
     * busy-threshold-factor
         Value to divide busy-thresholds by to make the busy threshold.
+
+    * number of iterations to look back for migration. Dodgy aperf/mperf ratios
+      will be ignored if the fall in this interval.
 """
 
 
@@ -37,37 +40,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from warmup.krun_results import read_krun_results_file
 
-# debug bits
-DEBUG = False
-if os.environ.get("AM_DEBUG"):
-    DEBUG = True
 
-
-class AMResult(object):
-    def __init__(self):
-        self.ratio_bounds_idle = [1.0, 1.0]
-        self.ratio_bounds_busy = [1.0, 1.0]
-
-    def __str__(self):
-        return "idle=%s, busy=%s" % \
-            (self.ratio_bounds_idle, self.ratio_bounds_busy)
-
-    def merge(self, other):
-        """Merge the intervals of two AMResults"""
-
-        self.ratio_bounds_idle = [
-            min(self.ratio_bounds_idle[0], other.ratio_bounds_idle[0]),
-            max(self.ratio_bounds_idle[1], other.ratio_bounds_idle[1]),
-        ]
-        self.ratio_bounds_busy = [
-            min(self.ratio_bounds_busy[0], other.ratio_bounds_busy[0]),
-            max(self.ratio_bounds_busy[1], other.ratio_bounds_busy[1]),
-        ]
-
-
-MIGRATION_LOOKBACK = 9
-def recently_migrated(aperfs, iter_idx, busy_threshold):
-    for i in xrange(1, MIGRATION_LOOKBACK + 1):
+def recently_migrated(aperfs, iter_idx, busy_threshold, migration_lookback):
+    for i in xrange(1, migration_lookback + 1):
         prior_aperf = aperfs[iter_idx - i]
         if prior_aperf < busy_threshold:
             return True
@@ -75,10 +50,9 @@ def recently_migrated(aperfs, iter_idx, busy_threshold):
 
 
 def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
-                  key, pexec_idx, core_idx):
+                  key, pexec_idx, core_idx, migration_lookback):
     assert len(aperfs) == len(mperfs) == len(wcts)
 
-    res = AMResult()
     iter_idx = 0
     for aval, mval, wctval in zip(aperfs, mperfs, wcts):
         # normalise the counts to per-second readings
@@ -86,37 +60,23 @@ def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
         norm_mval = float(mval) / wctval
         ratio = norm_aval / norm_mval
 
-        # Record the extents of ratio for idle/busy times for the summary
-        if norm_aval < busy_threshold:
-            # Idle core
-            if ratio < 1.0 and ratio < res.ratio_bounds_idle[0]:
-                res.ratio_bounds_idle[0] = ratio
-            if ratio > 1.0 and ratio > res.ratio_bounds_idle[1]:
-                res.ratio_bounds_idle[1] = ratio
-        else:
+        if norm_aval > busy_threshold:
             # Busy core
-            if ratio < 1.0 and ratio < res.ratio_bounds_busy[0]:
-                res.ratio_bounds_busy[0] = ratio
-            if ratio > 1.0 and ratio > res.ratio_bounds_busy[1]:
-                res.ratio_bounds_busy[1] = ratio
-
             if ratio < ratio_bounds[0]:
-                if not recently_migrated(aperfs, iter_idx, busy_threshold):
-                    print("WARNING! Thottling?: key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
+                if not recently_migrated(aperfs, iter_idx, busy_threshold,
+                                         migration_lookback):
+                    print("WARNING! Thottling?: "
+                          "key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
                           % (key, pexec_idx, iter_idx, core_idx, ratio))
             elif ratio > ratio_bounds[1]:
-                print("WARNING! Turbo?: key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
+                print("WARNING! Turbo?: "
+                      "key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
                       % (key, pexec_idx, iter_idx, core_idx, ratio))
         iter_idx += 1
-    assert res.ratio_bounds_idle[0] <= res.ratio_bounds_idle[1]
-    assert res.ratio_bounds_busy[0] <= res.ratio_bounds_busy[1]
-    return res
 
 
-def main(data_dct, ratio_bounds, busy_threshold):
+def main(data_dct, ratio_bounds, busy_threshold, migration_lookback):
     pexecs_checked = 0
-    summary = AMResult()
-
     for key, key_wcts in data_dct["wallclock_times"].iteritems():
         key_aperfs = data_dct["aperf_counts"][key]
         key_mperfs = data_dct["mperf_counts"][key]
@@ -140,20 +100,14 @@ def main(data_dct, ratio_bounds, busy_threshold):
                     # tickless core
                     busy_threshold = busy_thresholds[1]
 
-                res = check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
-                                    busy_threshold, ratio_bounds,
-                                    key, pexec_idx, core_idx)
-                summary.merge(res)
-            pexecs_checked +=1
-    print("")
-    print("num proc. execs. checked: %s" % pexecs_checked)
-    print("busy a/mperf count threshold: %s" % busy_threshold)
-    print("aperf/mperf ratio thresholds: [%s, %s]" % (ratio_bounds[0], ratio_bounds[1]))
-    print("summary: %s " % summary)
+                check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
+                              busy_threshold, ratio_bounds,
+                              key, pexec_idx, core_idx, migration_lookback)
+            pexecs_checked += 1
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 7:
         print(__doc__)
         sys.exit(1)
 
@@ -162,10 +116,11 @@ if __name__ == "__main__":
         ratio_bounds = float(lo_ratio), float(hi_ratio)
         busy_threshold_factor = float(sys.argv[5])
         busy_thresholds = float(sys.argv[3]) / busy_threshold_factor, \
-            float(sys.argv[4]) / busy_threshold_factor # tickful, tickless
+            float(sys.argv[4]) / busy_threshold_factor  # tickful, tickless
+        migration_lookback = int(sys.argv[6])
     except:
         print(__doc__)
         sys.exit(1)
 
     data_dct = read_krun_results_file(sys.argv[1])
-    main(data_dct, ratio_bounds, busy_thresholds)
+    main(data_dct, ratio_bounds, busy_thresholds, migration_lookback)
