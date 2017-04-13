@@ -25,10 +25,11 @@ Arguments:
         Estimated time-normalised (per-second) aperf reading for a idle
         tickless CPU core.
 
-    * busy-threshold-factor
+    * busy-threshold-factor:
         Value to divide busy-thresholds by to make the busy threshold.
 
-    * number of iterations to look back for migration. Dodgy aperf/mperf ratios
+    * migration-lookback:
+      Number of iterations to look back for migration. Dodgy aperf/mperf ratios
       will be ignored if the fall in this interval.
 """
 
