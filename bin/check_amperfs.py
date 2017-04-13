@@ -1,4 +1,32 @@
 #!/usr/bin/env python2.7
+"""
+usage: check_amperfs.py <results_file> <ratio-bounds>
+            <tickful-idle-threshold> <tickless-idle-threshold>
+            <idle-threshold-factor>
+
+Checks if the CPU has clocked down or entered turbo mode during Krun
+benchmarking.
+
+Arguments:
+    * results_file:
+        A krun results file.
+
+    * ratio-bounds:
+        Comma separated pair of allowed deviation from the target aperf/mperf
+        ratio. e.g. '0.9,1.2'.
+
+    * tickful-idle-threshold:
+        Estimated time-normalised (per-second) aperf reading for a idle tickful
+        CPU core.
+
+    * tickless-idle-threshold:
+        Estimated time-normalised (per-second) aperf reading for a idle
+        tickless CPU core.
+
+    * idle-threshold-factor
+        Value to multiply idle-thresholds by to make the idle/busy threshold.
+"""
+
 
 import sys
 import os
@@ -11,16 +39,6 @@ from warmup.krun_results import read_krun_results_file
 DEBUG = False
 if os.environ.get("AM_DEBUG"):
     DEBUG = True
-
-
-# Any A/MPERF below this value is considered an idle core.
-# An idle core is in the low millions on our machines.
-IDLE_AMPERF_COUNT_THRESHOLD = 20 * 1000000
-
-# allowable deviation from ratio of 1.0 when busy
-BUSY_ERROR_THESHOLD = 0.025
-BUSY_ERROR_LO_BOUND = 1.0 - BUSY_ERROR_THESHOLD
-BUSY_ERROR_HI_BOUND = 1.0 + BUSY_ERROR_THESHOLD
 
 
 class AMResult(object):
@@ -45,7 +63,7 @@ class AMResult(object):
         ]
 
 
-def check_amperfs(aperfs, mperfs, wcts):
+def check_amperfs(aperfs, mperfs, wcts, idle_threshold):
     assert len(aperfs) == len(mperfs) == len(wcts)
 
     res = AMResult()
@@ -56,7 +74,7 @@ def check_amperfs(aperfs, mperfs, wcts):
         ratio = norm_aval / norm_mval
 
         # Record the extents of ratio for idle/busy times
-        if norm_mval < IDLE_AMPERF_COUNT_THRESHOLD:
+        if norm_mval < idle_threshold:
             # Idle core
             if ratio < 1.0 and ratio < res.ratio_bounds_idle[0]:
                 res.ratio_bounds_idle[0] = ratio
@@ -73,7 +91,7 @@ def check_amperfs(aperfs, mperfs, wcts):
     return res
 
 
-def main(data_dct):
+def main(data_dct, ratio_bounds, idle_threshold):
     pexecs_checked = 0
     summary = AMResult()
 
@@ -93,33 +111,52 @@ def main(data_dct):
             for core_idx in xrange(len(pexec_aperfs)):
                 core_aperfs = pexec_aperfs[core_idx]
                 core_mperfs = pexec_mperfs[core_idx]
-                res = check_amperfs(core_aperfs, core_mperfs, pexec_wcts)
+                if core_idx == 0:
+                    # tickful core
+                    idle_threshold = idle_thresholds[0]
+                else:
+                    # tickless core
+                    idle_threshold = idle_thresholds[1]
+
+                res = check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
+                                    idle_threshold)
 
                 # Now report errors
-                if res.ratio_bounds_busy[0] < BUSY_ERROR_LO_BOUND:
+                if res.ratio_bounds_busy[0] < ratio_bounds[0]:
                     print("WARNING! Thottling?: key=%s, pexec=%s, core=%s, %s"
                           % (key, pexec_idx, core_idx, res))
-                elif res.ratio_bounds_busy[1] > BUSY_ERROR_HI_BOUND:
+                elif res.ratio_bounds_busy[1] > ratio_bounds[1]:
                     print("WARNING! Turbo?: key=%s, pexec=%s, core=%s, %s"
                           % (key, pexec_idx, core_idx, res))
                 else:
-                    assert BUSY_ERROR_LO_BOUND <= res.ratio_bounds_busy[0]
-                    assert res.ratio_bounds_busy[1] <= BUSY_ERROR_HI_BOUND
+                    assert ratio_bounds[0] <= res.ratio_bounds_busy[0]
+                    assert res.ratio_bounds_busy[1] <= ratio_bounds[1]
                     if DEBUG:
                         print("ok: key=%s, pexec=%s, core=%s, %s" %
                               (key, pexec_idx, core_idx, res))
                 summary.merge(res)
             pexecs_checked +=1
+    print("")
     print("num proc. execs. checked: %s" % pexecs_checked)
-    print("idle a/mperf count threshold: %s" % IDLE_AMPERF_COUNT_THRESHOLD)
-    print("busy ratio thresholds: [%s, %s]" % (BUSY_ERROR_LO_BOUND, BUSY_ERROR_HI_BOUND))
+    print("idle a/mperf count threshold: %s" % idle_threshold)
+    print("busy ratio thresholds: [%s, %s]" % (ratio_bounds[0], ratio_bounds[1]))
     print("summary: %s " % summary)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: check_amperfs.py <results_file>")
+    if len(sys.argv) != 6:
+        print(__doc__)
+        sys.exit(1)
+
+    try:
+        lo_ratio, hi_ratio = sys.argv[2].split(",")
+        ratio_bounds = float(lo_ratio), float(hi_ratio)
+        idle_threshold_factor = float(sys.argv[5])
+        idle_thresholds = float(sys.argv[3]) * idle_threshold_factor, \
+            float(sys.argv[4]) * idle_threshold_factor # tickful, tickless
+    except:
+        print(__doc__)
         sys.exit(1)
 
     data_dct = read_krun_results_file(sys.argv[1])
-    main(data_dct)
+    main(data_dct, ratio_bounds, idle_thresholds)
