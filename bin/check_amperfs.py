@@ -65,19 +65,28 @@ class AMResult(object):
         ]
 
 
-def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds):
+MIGRATION_LOOKBACK = 9
+def recently_migrated(aperfs, iter_idx, busy_threshold):
+    for i in xrange(1, MIGRATION_LOOKBACK + 1):
+        prior_aperf = aperfs[iter_idx - i]
+        if prior_aperf < busy_threshold:
+            return True
+    return False
+
+
+def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
+                  key, pexec_idx, core_idx):
     assert len(aperfs) == len(mperfs) == len(wcts)
 
     res = AMResult()
-    #iter_idx = 0
+    iter_idx = 0
     for aval, mval, wctval in zip(aperfs, mperfs, wcts):
         # normalise the counts to per-second readings
         norm_aval = float(aval) / wctval
         norm_mval = float(mval) / wctval
         ratio = norm_aval / norm_mval
 
-        # Record the extents of ratio for idle/busy times
-        #print("norm_aval=%f, busy_threshold=%f" % (norm_aval, busy_threshold))
+        # Record the extents of ratio for idle/busy times for the summary
         if norm_aval < busy_threshold:
             # Idle core
             if ratio < 1.0 and ratio < res.ratio_bounds_idle[0]:
@@ -91,14 +100,14 @@ def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds):
             if ratio > 1.0 and ratio > res.ratio_bounds_busy[1]:
                 res.ratio_bounds_busy[1] = ratio
 
-            #if ratio < ratio_bounds[0]:
-            #    print("WARNING! Thottling?")
-            #    import pdb; pdb.set_trace()
-            #elif ratio > ratio_bounds[1]:
-            #    print("WARNING! Turbo?")
-        #iter_idx += 1
-
-
+            if ratio < ratio_bounds[0]:
+                if not recently_migrated(aperfs, iter_idx, busy_threshold):
+                    print("WARNING! Thottling?: key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
+                          % (key, pexec_idx, iter_idx, core_idx, ratio))
+            elif ratio > ratio_bounds[1]:
+                print("WARNING! Turbo?: key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
+                      % (key, pexec_idx, iter_idx, core_idx, ratio))
+        iter_idx += 1
     assert res.ratio_bounds_idle[0] <= res.ratio_bounds_idle[1]
     assert res.ratio_bounds_busy[0] <= res.ratio_bounds_busy[1]
     return res
@@ -132,21 +141,8 @@ def main(data_dct, ratio_bounds, busy_threshold):
                     busy_threshold = busy_thresholds[1]
 
                 res = check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
-                                    busy_threshold, ratio_bounds)
-
-                # Now report errors
-                if res.ratio_bounds_busy[0] < ratio_bounds[0]:
-                    print("WARNING! Thottling?: key=%s, pexec=%s, core=%s, %s"
-                          % (key, pexec_idx, core_idx, res))
-                elif res.ratio_bounds_busy[1] > ratio_bounds[1]:
-                    print("WARNING! Turbo?: key=%s, pexec=%s, core=%s, %s"
-                          % (key, pexec_idx, core_idx, res))
-                else:
-                    assert ratio_bounds[0] <= res.ratio_bounds_busy[0]
-                    assert res.ratio_bounds_busy[1] <= ratio_bounds[1]
-                    if DEBUG:
-                        print("ok: key=%s, pexec=%s, core=%s, %s" %
-                              (key, pexec_idx, core_idx, res))
+                                    busy_threshold, ratio_bounds,
+                                    key, pexec_idx, core_idx)
                 summary.merge(res)
             pexecs_checked +=1
     print("")
