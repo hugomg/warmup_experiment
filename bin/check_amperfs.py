@@ -51,7 +51,7 @@ def recently_migrated(aperfs, iter_idx, busy_threshold, migration_lookback):
 
 
 def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
-                  key, pexec_idx, core_idx, migration_lookback):
+                  key, pexec_idx, core_idx, migration_lookback, cycles, all_cores_aperfs, all_cores_mperfs, all_cores_cycles):
     assert len(aperfs) == len(mperfs) == len(wcts)
 
     iter_idx = 0
@@ -69,6 +69,34 @@ def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
                     print("WARNING! Thottling?: "
                           "key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
                           % (key, pexec_idx, iter_idx, core_idx, ratio))
+                    start_idx = iter_idx - 15
+                    stop_idx = iter_idx + 1
+                    for core in 0,1,2,3:
+                        print("core %d" % core)
+                        sys.stdout.write("cc: ")
+                        for i in xrange(start_idx, stop_idx):
+                            star = " "
+                            if iter_idx == i and core == core_idx:
+                                star = ">"
+                            sys.stdout.write("%s%10d  " % (star, all_cores_cycles[core][i]))
+                        print("")
+                        sys.stdout.write("am: ")
+                        for i in xrange(start_idx, stop_idx):
+                            star = " "
+                            if iter_idx == i and core == core_idx:
+                                star = ">"
+                            anorm = float(all_cores_aperfs[core][i]) / wcts[i]
+                            mnorm = float(all_cores_mperfs[core][i]) / wcts[i]
+                            rt = anorm/mnorm
+                            sys.stdout.write("%s%10.2f  " % (star, rt))
+                        sys.stdout.write("\nwc: ")
+                        for i in xrange(start_idx, stop_idx):
+                            star = " "
+                            if iter_idx == i and core == core_idx:
+                                star = ">"
+                            sys.stdout.write("%s%10.2f  " % (star, wcts[i]))
+                        print("\n")
+                    import pdb; pdb.set_trace()
             elif ratio > ratio_bounds[1]:
                 print("WARNING! Turbo?: "
                       "key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
@@ -81,6 +109,7 @@ def main(data_dct, ratio_bounds, busy_threshold, migration_lookback):
     for key, key_wcts in data_dct["wallclock_times"].iteritems():
         key_aperfs = data_dct["aperf_counts"][key]
         key_mperfs = data_dct["mperf_counts"][key]
+        key_cycles = data_dct["core_cycle_counts"][key]
         assert len(key_aperfs) == len(key_mperfs) == len(key_wcts), \
             "pexec count should match"
 
@@ -88,12 +117,14 @@ def main(data_dct, ratio_bounds, busy_threshold, migration_lookback):
             pexec_aperfs = key_aperfs[pexec_idx]
             pexec_mperfs = key_mperfs[pexec_idx]
             pexec_wcts = key_wcts[pexec_idx]
+            pexec_cycles = key_cycles[pexec_idx]
             assert len(pexec_aperfs) == len(pexec_mperfs), \
                 "core count should match for a/mperfs"
 
             for core_idx in xrange(len(pexec_aperfs)):
                 core_aperfs = pexec_aperfs[core_idx]
                 core_mperfs = pexec_mperfs[core_idx]
+                core_cycles = pexec_cycles[core_idx]
                 if core_idx == 0:
                     # tickful core
                     busy_threshold = busy_thresholds[0]
@@ -103,7 +134,7 @@ def main(data_dct, ratio_bounds, busy_threshold, migration_lookback):
 
                 check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
                               busy_threshold, ratio_bounds,
-                              key, pexec_idx, core_idx, migration_lookback)
+                              key, pexec_idx, core_idx, migration_lookback, core_cycles, pexec_aperfs, pexec_mperfs, pexec_cycles)
             pexecs_checked += 1
 
 
