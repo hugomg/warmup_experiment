@@ -53,13 +53,15 @@ def recently_migrated(aperfs, iter_idx, busy_threshold, migration_lookback):
 BAD_COUNT = 0
 BAD_OUTLIER_COUNT = 0
 BAD_PEXECS = 0
+OUTLIER_VIOLATIONS = []
+NON_OUTLIER_VIOLATIONS = []
 def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
                   key, pexec_idx, core_idx, migration_lookback, cycles, all_cores_aperfs, all_cores_mperfs, all_cores_cycles, outliers):
     assert len(aperfs) == len(mperfs) == len(wcts)
     global BAD_COUNT, BAD_OUTLIER_COUNT
 
     iter_idx = 0
-    bad_pexec = False
+    core_violates = False
     for aval, mval, wctval in zip(aperfs, mperfs, wcts):
         # normalise the counts to per-second readings
         norm_aval = float(aval) / wctval
@@ -68,51 +70,28 @@ def check_amperfs(aperfs, mperfs, wcts, busy_threshold, ratio_bounds,
 
         if norm_aval > busy_threshold:
             # Busy core
+            badness_type = None
             if ratio < ratio_bounds[0]:
-                #if not recently_migrated(aperfs, iter_idx, busy_threshold,
-                #                         migration_lookback):
-                if True:
-                    bad_pexec = True
-                    BAD_COUNT += 1
-                    if iter_idx in outliers:
-                        BAD_OUTLIER_COUNT += 1
-                    else:
-                        print("WARNING! Thottling?: "
-                              "key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
-                      % (key, pexec_idx, iter_idx, core_idx, ratio))
-                    #start_idx = iter_idx - 15
-                    #stop_idx = iter_idx + 1
-                    #for core in 0,1,2,3:
-                    #    print("core %d" % core)
-                    #    sys.stdout.write("cc: ")
-                    #    for i in xrange(start_idx, stop_idx):
-                    #        star = " "
-                    #        if iter_idx == i and core == core_idx:
-                    #            star = ">"
-                    #        sys.stdout.write("%s%10d  " % (star, all_cores_cycles[core][i]))
-                    #    print("")
-                    #    sys.stdout.write("am: ")
-                    #    for i in xrange(start_idx, stop_idx):
-                    #        star = " "
-                    #        if iter_idx == i and core == core_idx:
-                    #            star = ">"
-                    #        anorm = float(all_cores_aperfs[core][i]) / wcts[i]
-                    #        mnorm = float(all_cores_mperfs[core][i]) / wcts[i]
-                    #        rt = anorm/mnorm
-                    #        sys.stdout.write("%s%10.2f  " % (star, rt))
-                    #    sys.stdout.write("\nwc: ")
-                    #    for i in xrange(start_idx, stop_idx):
-                    #        star = " "
-                    #        if iter_idx == i and core == core_idx:
-                    #            star = ">"
-                    #        sys.stdout.write("%s%10.2f  " % (star, wcts[i]))
-                    #    print("\n")
+                core_violates = True
+                BAD_COUNT += 1
+                badness_type = "throttling"
             elif ratio > ratio_bounds[1]:
-                print("WARNING! Turbo?: "
-                      "key=%s, pexec=%s, iter=%s core=%s, ratio=%s"
-                      % (key, pexec_idx, iter_idx, core_idx, ratio))
+                core_violates = True
+                badness_type = "turbo"
+                BAD_COUNT += 1
+
+            if badness_type is not None:
+                rec = ("%10s: key=%35s, pexec=%2d, iter=%4d core=%s, "
+                       "ratio=%10.8f") % \
+                    (badness_type, key, pexec_idx, iter_idx, core_idx,
+                     ratio)
+                if iter_idx in outliers:
+                    OUTLIER_VIOLATIONS.append(rec)
+                    BAD_OUTLIER_COUNT += 1
+                else:
+                    NON_OUTLIER_VIOLATIONS.append(rec)
         iter_idx += 1
-    return bad_pexec
+    return core_violates
 
 
 def main(data_dct, ratio_bounds, busy_threshold, migration_lookback):
@@ -149,18 +128,26 @@ def main(data_dct, ratio_bounds, busy_threshold, migration_lookback):
                     busy_threshold = busy_thresholds[1]
 
                 bad_core = check_amperfs(core_aperfs, core_mperfs, pexec_wcts,
-                                    busy_threshold, ratio_bounds,
-                                    key, pexec_idx, core_idx,
-                                    migration_lookback, core_cycles,
-                                    pexec_aperfs, pexec_mperfs, pexec_cycles,
-                                    pexec_outliers)
-                if bad_core and not bad_pexec:
+                                         busy_threshold, ratio_bounds, key,
+                                         pexec_idx, core_idx,
+                                         migration_lookback, core_cycles,
+                                         pexec_aperfs, pexec_mperfs,
+                                         pexec_cycles, pexec_outliers)
+                if bad_core and (not bad_pexec):
                     bad_pexec = True
             if bad_pexec:
                 BAD_PEXECS += 1
             pexecs_checked += 1
 
-    print("Violations: %s" % BAD_COUNT)
+    print("OUTLIER VIOLATIONS:")
+    for i in OUTLIER_VIOLATIONS:
+        print("  " + i)
+
+    print("NON OUTLIER VIOLATIONS:")
+    for i in NON_OUTLIER_VIOLATIONS:
+        print("  " + i)
+
+    print("\nTotal violations: %s" % BAD_COUNT)
     print("Of which outliers: %s" % BAD_OUTLIER_COUNT)
     print("# Pexecs with violations: %s" % BAD_PEXECS)
     print("# Pexecs examined: %s" % pexecs_checked)
